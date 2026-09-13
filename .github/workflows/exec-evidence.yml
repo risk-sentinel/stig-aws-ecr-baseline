@@ -65,7 +65,7 @@ on:
       image:
         description: 'Pinned auditor image supplying cinc-auditor, hdf, saf and jq.'
         type: string
-        default: risksentinel/sparc-auditor:v0.5.0
+        default: risksentinel/sparc-auditor:v1.2.1
     secrets:
       AWS_ROLE_ARN:
         required: false
