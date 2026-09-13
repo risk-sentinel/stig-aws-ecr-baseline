@@ -41,21 +41,32 @@ require "inspec"
 require "aws-sdk-core"
 require "aws-sdk-ec2"
 
+MANIFEST = YAML.safe_load_file(File.join(__dir__, "region_coverage_manifest.yml"))
+
+# The vendored inspec-aws supplies AwsResourceBase, and it is only reachable
+# once its directory is on the load path — hence the glob before the require
+# rather than a plain top-of-file require.
+VENDOR = Dir.glob("vendor/*/libraries").find { |d| File.exist?(File.join(d, "aws_backend.rb")) }
+abort "FATAL: no vendored inspec-aws found — run `cinc-auditor vendor . --overwrite` first." if VENDOR.nil?
+$LOAD_PATH.unshift(VENDOR)
+require "aws_backend"
+
 # `Aws.config[:<service>]` raises "invalid configuration option" until that
 # service's SDK gem is loaded — the config key is registered by the gem, not by
-# aws-sdk-core. Each manifest entry therefore declares its service and we
-# require `aws-sdk-<service>` before configuring it. A service whose gem is not
-# baked into the image is reported rather than silently skipped, because a
-# missing gem means that resource is UNCHECKED, which is the condition this
-# whole harness exists to make visible.
-def require_service!(service)
-  require "aws-sdk-#{service}"
-  true
-rescue LoadError
-  false
+# aws-sdk-core. The services come from the manifest, so they are required here,
+# driven by it, rather than lazily inside a helper. A service whose gem is not
+# baked into the image is REPORTED rather than silently skipped: a missing gem
+# means that resource is unchecked, which is the condition this harness exists
+# to make visible.
+MISSING_GEMS = MANIFEST.fetch("resources").filter_map do |entry|
+  svc = entry.fetch("watch").fetch("service")
+  begin
+    require "aws-sdk-#{svc}"
+    nil
+  rescue LoadError
+    "#{entry.fetch('resource')} (aws-sdk-#{svc})"
+  end
 end
-
-MANIFEST = YAML.safe_load_file(File.join(__dir__, "region_coverage_manifest.yml"))
 REGIONS  = MANIFEST.fetch("regions")
 OBSERVED = Hash.new { |h, k| h[k] = [] }
 
@@ -69,13 +80,11 @@ end
 
 def install_stubs!(entries)
   Aws.config[:stub_responses] = true
-  missing = []
   by_service = Hash.new { |h, k| h[k] = {} }
   by_service["ec2"][:describe_regions] = { regions: REGIONS.map { |r| { region_name: r } } }
   entries.each do |e|
     w = e.fetch("watch")
     svc = w.fetch("service")
-    missing << "#{e.fetch('resource')} (aws-sdk-#{svc})" unless require_service!(svc)
     # Some operations have required response members — list_analyzers must carry
     # `analyzers`, for example — so an empty payload raises before the resource
     # is ever exercised. `payload:` in the manifest supplies a minimal valid shape.
@@ -88,15 +97,9 @@ def install_stubs!(entries)
     next if svc != "ec2" && !Aws.constants.any? { |c| c.to_s.casecmp?(svc) }
     Aws.config[svc.to_sym] = { stub_responses: stubs }
   end
-  missing
 end
 
 def load_profile_libraries!
-  vendor = Dir.glob("vendor/*/libraries").find { |d| File.exist?(File.join(d, "aws_backend.rb")) }
-  abort "FATAL: no vendored inspec-aws found — run `cinc-auditor vendor . --overwrite` first." if vendor.nil?
-  $LOAD_PATH.unshift(vendor)
-  require "aws_backend"
-
   # Underscore-prefixed helper libraries load first in InSpec's alphabetical
   # order and define the modules resources `include` (e.g. RegionEnumeration).
   # Evaluating a resource without them raises NameError, which would look like a
@@ -104,12 +107,12 @@ def load_profile_libraries!
   Dir.glob("libraries/_*.rb").sort.each { |f| eval(File.read(f), TOPLEVEL_BINDING, f) } # rubocop:disable Security/Eval
 end
 
-missing_gems = install_stubs!(MANIFEST.fetch("resources"))
+install_stubs!(MANIFEST.fetch("resources"))
 load_profile_libraries!
 
-unless missing_gems.empty?
-  warn "region coverage: #{missing_gems.size} resource(s) UNCHECKED — SDK gem not in the image:"
-  missing_gems.each { |m| warn "  - #{m}" }
+unless MISSING_GEMS.empty?
+  warn "region coverage: #{MISSING_GEMS.size} resource(s) UNCHECKED — SDK gem not in the image:"
+  MISSING_GEMS.each { |m| warn "  - #{m}" }
   warn "An unchecked resource is not a passing resource. Bake the gem or drop the entry deliberately."
   exit 1
 end
