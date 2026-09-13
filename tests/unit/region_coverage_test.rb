@@ -39,7 +39,7 @@ ENV["AWS_SECRET_ACCESS_KEY"] ||= "stubbed"
 require "yaml"
 require "inspec"
 require "aws-sdk-core"
-require "aws-sdk-ec2"
+require_relative "region_coverage_requires"
 
 MANIFEST = YAML.safe_load_file(File.join(__dir__, "region_coverage_manifest.yml"))
 
@@ -53,19 +53,19 @@ require "aws_backend"
 
 # `Aws.config[:<service>]` raises "invalid configuration option" until that
 # service's SDK gem is loaded — the config key is registered by the gem, not by
-# aws-sdk-core. The services come from the manifest, so they are required here,
-# driven by it, rather than lazily inside a helper. A service whose gem is not
-# baked into the image is REPORTED rather than silently skipped: a missing gem
-# means that resource is unchecked, which is the condition this harness exists
-# to make visible.
+# aws-sdk-core. Which services are needed varies per repository, so the requires
+# live in region_coverage_requires.rb next door: literal, top-of-file `require`
+# lines, which keeps this shared file identical across every profile repository
+# and keeps every require at the top of its own file.
+#
+# The two can drift, so they are reconciled rather than trusted. A manifest entry
+# naming a service with no corresponding require is REPORTED, not skipped: an
+# unchecked resource is not a passing resource, and silence here would hide the
+# exact condition this harness exists to surface.
 MISSING_GEMS = MANIFEST.fetch("resources").filter_map do |entry|
   svc = entry.fetch("watch").fetch("service")
-  begin
-    require "aws-sdk-#{svc}"
-    nil
-  rescue LoadError
-    "#{entry.fetch('resource')} (aws-sdk-#{svc})"
-  end
+  loaded = Aws.constants.any? { |c| c.to_s.casecmp?(svc) }
+  loaded ? nil : "#{entry.fetch('resource')} — add `require \"aws-sdk-#{svc}\"` to tests/unit/region_coverage_requires.rb"
 end
 REGIONS  = MANIFEST.fetch("regions")
 OBSERVED = Hash.new { |h, k| h[k] = [] }
