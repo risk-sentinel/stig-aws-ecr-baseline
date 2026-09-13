@@ -71,9 +71,26 @@ REGIONS  = MANIFEST.fetch("regions")
 OBSERVED = Hash.new { |h, k| h[k] = [] }
 
 # Record the region of every stubbed call, then return a minimal valid shape.
+# Guards against runaway pagination. With stub_responses and NO explicit payload
+# the SDK fills every string member with a placeholder — including next_token —
+# so a resource looping `break unless next_token` never terminates and the whole
+# job hangs rather than failing. Supplying any payload hash makes unspecified
+# members nil, which ends the loop; this cap catches the case where someone
+# forgets, and turns an indefinite hang into a diagnosable failure.
+#
+# A hang is the worst outcome available here: it burns a runner, reports nothing,
+# and looks like slowness rather than a defect.
+CALL_CAP_PER_REGION = 50
+
 def recorder(key, payload = {})
   lambda do |ctx|
     OBSERVED[key] << ctx.client.config.region
+    if OBSERVED[key].size > REGIONS.size * CALL_CAP_PER_REGION
+      raise "runaway pagination on #{key}: over #{CALL_CAP_PER_REGION} calls per region. " \
+            "The stub is almost certainly returning a placeholder next_token. Give this " \
+            "entry a `payload:` in the manifest — any hash makes unspecified members nil " \
+            "and ends the loop."
+    end
     payload
   end
 end
