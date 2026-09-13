@@ -82,11 +82,16 @@ OBSERVED = Hash.new { |h, k| h[k] = [] }
 # and looks like slowness rather than a defect.
 CALL_CAP_PER_REGION = 50
 
+# A named class rather than a raised string: callers can rescue this
+# specifically, and the class name alone says what went wrong in a backtrace.
+class RunawayPagination < StandardError; end
+
 def recorder(key, payload = {})
   lambda do |ctx|
     OBSERVED[key] << ctx.client.config.region
     if OBSERVED[key].size > REGIONS.size * CALL_CAP_PER_REGION
-      raise "runaway pagination on #{key}: over #{CALL_CAP_PER_REGION} calls per region. " \
+      raise RunawayPagination,
+            "runaway pagination on #{key}: over #{CALL_CAP_PER_REGION} calls per region. " \
             "The stub is almost certainly returning a placeholder next_token. Give this " \
             "entry a `payload:` in the manifest — any hash makes unspecified members nil " \
             "and ends the loop."
