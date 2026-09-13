@@ -36,6 +36,7 @@ ENV["AWS_REGION"]            ||= "us-east-1"
 ENV["AWS_ACCESS_KEY_ID"]     ||= "stubbed"
 ENV["AWS_SECRET_ACCESS_KEY"] ||= "stubbed"
 
+require "timeout"
 require "yaml"
 require "inspec"
 require "aws-sdk-core"
@@ -85,6 +86,19 @@ CALL_CAP_PER_REGION = 50
 # A named class rather than a raised string: callers can rescue this
 # specifically, and the class name alone says what went wrong in a backtrace.
 class RunawayPagination < StandardError; end
+
+# Deliberately inherits Exception, NOT StandardError. A resource with a broad
+# `rescue StandardError` would otherwise swallow the abort and keep looping,
+# which is precisely the failure this guard exists to stop. Nothing in a profile
+# rescues Exception.
+class ResourceHang < Exception; end # rubocop:disable Lint/InheritException
+
+# The per-operation call cap only sees the operation being WATCHED. A resource
+# that paginates on some other call still loops forever and the recorder never
+# fires — which is how a run hung for fifteen minutes with both the cap and the
+# stub payloads in place. A wall-clock timeout is the only guard that does not
+# depend on correctly guessing which call misbehaves.
+RESOURCE_TIMEOUT_SECONDS = 45
 
 def recorder(key, payload = {})
   lambda do |ctx|
@@ -161,7 +175,18 @@ MANIFEST.fetch("resources").each do |e|
   key = "#{w.fetch('service')}/#{w.fetch('operation')}"
   OBSERVED[key].clear
   begin
-    args.empty? ? klass.new : klass.new(**args)
+    Timeout.timeout(RESOURCE_TIMEOUT_SECONDS, ResourceHang) do
+      args.empty? ? klass.new : klass.new(**args)
+    end
+  rescue ResourceHang
+    # Always fatal, never downgraded by status. An unexplained hang is not a
+    # known limitation — it is a resource we could not assess and did not find
+    # out why, and letting `unobservable` absorb it would recreate the silence.
+    failures << "#{name}: did not finish within #{RESOURCE_TIMEOUT_SECONDS}s — " \
+                "almost certainly paginating forever against a stub. The watched " \
+                "operation has a payload; check whether it paginates on ANOTHER " \
+                "call, which the per-operation cap cannot see."
+    next
   rescue StandardError => ex
     # A raise here is a LEAD, not a finding. This harness instantiates resources
     # outside InSpec's normal resource machinery, and something that machinery
