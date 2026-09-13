@@ -1,0 +1,61 @@
+# Which custom resources must enumerate every enabled region, and how the
+# harness should construct and observe each one.
+#
+#   status - `enforced` must query every region and fails the build if it
+#            regresses. `known_blind` is reported without failing, so this
+#            harness can land before the fixes and each resource flips to
+#            enforced in the PR that fixes it. `unobservable` means the walk
+#            cannot be seen through a stubbed client, requires a `reason`, and
+#            is NOT a defect.
+#   watch  - NEVER watch describe_regions: it is the one-off discovery call made
+#            against the default client and proves nothing about the walk.
+#
+# All three resources here are currently region-blind (#38). ECR is a regional
+# service with a per-region registry, so a repository in another region is
+# simply never seen — and the control passes having found nothing, which HDF
+# renders as "does not apply here" rather than "we did not look".
+#
+# This repository has no resource that already enumerates regions, so unlike the
+# other profiles there is no in-tree reference here. The pattern to copy lives in
+# cis-aws-foundations-baseline/libraries/_region_enumeration.rb.
+#
+# OPEN JUDGEMENT CALL, recorded rather than decided: aws_ecr_repository takes a
+# required `repository_name` and looks one repository up by name. Sweeping every
+# region may be wrong — two regions can hold repositories of the same name, and
+# the caller may mean a specific one. Resolving the region from the caller may
+# be the better answer, as cis-rhel-9-baseline does from its scan target.
+
+regions: [us-east-1, us-west-2, eu-west-1]
+
+resources:
+  - resource: aws_ecr_registry_scanning
+    klass: AwsEcrRegistryScanning
+    # The registry scanning configuration is PER REGION -- each region has its
+    # own registry and its own scanning config, so one call answers for one
+    # region only. This is the entry most likely to mislead: it returns a valid
+    # configuration, so the control passes, having described one registry.
+    watch:
+      service: ecr
+      operation: get_registry_scanning_configuration
+      # The resource reads .scanning_configuration.scan_type immediately; an
+      # empty stub returns nil and raises NoMethodError before the walk is
+      # reached, which reads as a broken resource rather than a thin stub.
+      payload: { scanning_configuration: { scan_type: "BASIC", rules: [] } }
+    status: known_blind
+
+  - resource: aws_ecr_repositories
+    klass: AwsEcrRepositories
+    watch:
+      service: ecr
+      operation: describe_repositories
+      payload: { repositories: [] }
+    status: known_blind
+
+  - resource: aws_ecr_repository
+    klass: AwsEcrRepository
+    args: { repository_name: "example" }
+    watch:
+      service: ecr
+      operation: describe_repositories
+      payload: { repositories: [] }
+    status: known_blind
