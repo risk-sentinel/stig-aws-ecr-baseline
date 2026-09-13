@@ -91,6 +91,28 @@ jobs:
             || { echo "::error::json produced no controls"; exit 1; }
           echo "json loaded $(jq '.controls | length' /tmp/profile.json) controls"
 
+      - name: Region coverage (stubbed AWS, no credentials)
+        # `check` and `json` only LOAD a resource. Neither can observe which AWS
+        # calls it makes, so neither can tell a resource that walks every enabled
+        # region from one bound to a single `aws_region` client (#28). The second
+        # kind does not fail when it misses a region — it finds nothing and passes,
+        # or routes to Not Applicable, which HDF renders as "does not apply here"
+        # rather than "we did not look".
+        #
+        # `exec-evidence.yml` is workflow_call only, so no PR ever execs this
+        # profile. Without this step a region fix would ship on evidence that
+        # structurally cannot detect the bugs it is most likely to introduce.
+        #
+        # Stubs every AWS client via Aws.config[:stub_responses] and records the
+        # region of each call, so no credentials are involved. Resources marked
+        # `known_blind` in the manifest are reported without failing; one marked
+        # `enforced` that regresses fails the build.
+        run: |
+          set -uo pipefail
+          docker run --rm -v "$PWD:/work" -w /work \
+            --entrypoint /opt/cinc-workstation/embedded/bin/ruby \
+            "${AUDITOR_IMAGE}" tests/unit/region_coverage_test.rb
+
       - name: Control-tag completeness
         # `check` and `json` read tags but assert nothing about them. A control
         # with no Rev 4 anchor, a tag written twice, or a tag whose value is a
