@@ -34,7 +34,13 @@ resources:
     # own registry and its own scanning config, so one call answers for one
     # region only. This is the entry most likely to mislead: it returns a valid
     # configuration, so the control passes, having described one registry.
-    watch: { service: ecr, operation: get_registry_scanning_configuration }
+    watch:
+      service: ecr
+      operation: get_registry_scanning_configuration
+      # The resource reads .scanning_configuration.scan_type immediately; an
+      # empty stub returns nil and raises NoMethodError before the walk is
+      # reached, which reads as a broken resource rather than a thin stub.
+      payload: { scanning_configuration: { scan_type: "BASIC", rules: [] } }
     status: known_blind
 
   - resource: aws_ecr_repositories

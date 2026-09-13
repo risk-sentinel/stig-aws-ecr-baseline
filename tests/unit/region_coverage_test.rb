@@ -80,7 +80,9 @@ def install_stubs!(entries)
     # `analyzers`, for example — so an empty payload raises before the resource
     # is ever exercised. `payload:` in the manifest supplies a minimal valid shape.
     payload = (w["payload"] || {}).transform_keys(&:to_sym)
-    by_service[svc][w.fetch("operation").to_sym] = recorder(e.fetch("resource"), payload)
+    op = w.fetch("operation").to_sym
+    key = "#{svc}/#{op}"
+    by_service[svc][op] = recorder(key, payload)
   end
   by_service.each do |svc, stubs|
     next if svc != "ec2" && !Aws.constants.any? { |c| c.to_s.casecmp?(svc) }
@@ -129,7 +131,9 @@ MANIFEST.fetch("resources").each do |e|
   klass = Object.const_get(e.fetch("klass"))
   args  = (e["args"] || {}).transform_keys(&:to_sym)
 
-  OBSERVED[name].clear
+  w = e.fetch("watch")
+  key = "#{w.fetch('service')}/#{w.fetch('operation')}"
+  OBSERVED[key].clear
   begin
     args.empty? ? klass.new : klass.new(**args)
   rescue StandardError => ex
@@ -137,7 +141,7 @@ MANIFEST.fetch("resources").each do |e|
     next
   end
 
-  seen   = OBSERVED[name].uniq.sort
+  seen   = OBSERVED[key].uniq.sort
   missed = REGIONS.sort - seen
 
   if missed.empty?
