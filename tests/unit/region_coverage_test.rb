@@ -138,7 +138,23 @@ MANIFEST.fetch("resources").each do |e|
   begin
     args.empty? ? klass.new : klass.new(**args)
   rescue StandardError => ex
-    failures << "#{name}: raised #{ex.class}: #{ex.message}"
+    # A raise here is a LEAD, not a finding. This harness instantiates resources
+    # outside InSpec's normal resource machinery, and something that machinery
+    # supplies can be missing — which has already produced one false positive
+    # against code that runs correctly in a real exec. So a resource explicitly
+    # marked `unobservable` (with its reason) reports rather than fails; anything
+    # else still fails loudly, because an unexplained raise must not be silent.
+    if status == "unobservable"
+      reason = e["reason"].to_s
+      if reason.empty?
+        failures << "#{name}: raised #{ex.class} and `unobservable` requires a `reason`"
+      else
+        unobservable << "#{name}: raised #{ex.class} — #{reason}"
+        puts "  UNOBSERVABLE #{name} — raised #{ex.class}; #{reason}"
+      end
+    else
+      failures << "#{name}: raised #{ex.class}: #{ex.message}"
+    end
     next
   end
 
