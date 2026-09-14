@@ -114,6 +114,41 @@ def recorder(key, payload = {})
   end
 end
 
+# Pagination cursors, across every style the SDK uses. Under stub_responses the
+# SDK fills unspecified STRING members with a placeholder — cursors included — so
+# a resource looping `break unless next_token` never terminates. Nil-ing the
+# cursor is what ends the loop.
+#
+# Driven by the SDK's own API model rather than a hand-kept list. An inventory of
+# these profiles found 22 paginated calls across three cursor styles; enumerating
+# them by hand missed cases three times, because the manifest only names the
+# operation being WATCHED and a resource often paginates on a different one.
+CURSOR_MEMBERS = %i[
+  next_token marker next_marker next_page_token
+  last_evaluated_table_name continuation_token next_continuation_token
+].freeze
+
+def terminating_stubs(client_class)
+  api = client_class.api
+  api.operation_names.each_with_object({}) do |op, acc|
+    output = api.operation(op).output
+    next if output.nil?
+    cursors = CURSOR_MEMBERS & output.shape.member_names
+    acc[op] = cursors.to_h { |m| [m, nil] } unless cursors.empty?
+  end
+rescue StandardError
+  # A service whose API model cannot be read gets no pre-stubs; the wall-clock
+  # timeout still bounds it.
+  {}
+end
+
+def service_client_class(service)
+  const = Aws.constants.find { |c| c.to_s.casecmp?(service) }
+  const && Aws.const_get(const).const_get(:Client)
+rescue StandardError
+  nil
+end
+
 def install_stubs!(entries)
   Aws.config[:stub_responses] = true
   by_service = Hash.new { |h, k| h[k] = {} }
@@ -130,8 +165,11 @@ def install_stubs!(entries)
     by_service[svc][op] = recorder(key, payload)
   end
   by_service.each do |svc, stubs|
-    next if svc != "ec2" && !Aws.constants.any? { |c| c.to_s.casecmp?(svc) }
-    Aws.config[svc.to_sym] = { stub_responses: stubs }
+    klass = service_client_class(svc)
+    next if klass.nil?
+    # Terminating stubs first, watched recorders merged ON TOP so they win. Every
+    # other operation still answers — with its cursor nil'd, so it answers once.
+    Aws.config[svc.to_sym] = { stub_responses: terminating_stubs(klass).merge(stubs) }
   end
 end
 
