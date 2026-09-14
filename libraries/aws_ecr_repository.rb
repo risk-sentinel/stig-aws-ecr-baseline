@@ -59,7 +59,10 @@ class AwsEcrRepository < AwsResourceBase
       @client ||= c
       @region ||= region
     end
-    @client ||= @client
+    # Not found in any scanned region: fall back to the default-region client so
+    # describe_repositories raises RepositoryNotFoundException and the control
+    # reports "not found" rather than crashing on a nil client.
+    @client ||= @aws.ecr_client
 
     catch_aws_errors do
       resp = @client.describe_repositories(repository_names: [@repository_name])
