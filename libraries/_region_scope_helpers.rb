@@ -23,6 +23,17 @@
 # override is always passed in by the caller rather than read here.
 
 module RegionScope
+  # Raised when a list call cannot be paged safely. A named class rather than a
+  # raised string: callers can rescue this specifically, and the class name says
+  # what went wrong in a backtrace.
+  #
+  # Inherits StandardError deliberately. each_region_client rescues StandardError
+  # per region and records the reason in region_errors, which surfaces through
+  # region_error_summary as a connection_error -- so a pagination failure stays
+  # VISIBLE as an unassessed region rather than vanishing. catch_aws_errors only
+  # rescues Aws::Errors::*, so it propagates past that.
+  class PaginationError < StandardError; end
+
   # Sweep every enabled region in the partition. Must be asked for explicitly.
   ALL_REGIONS = "*".freeze
 
@@ -162,10 +173,15 @@ module RegionScope
       nxt = resp.respond_to?(cursor) ? resp.public_send(cursor) : nil
       nxt = resp.next_marker if nxt.nil? && resp.respond_to?(:next_marker)
       break if nxt.nil? || nxt.to_s.empty?
-      raise "paginate_all: cursor #{cursor} did not advance -- refusing to loop" if nxt == token
+      if nxt == token
+        raise PaginationError,
+              "paginate_all: cursor #{cursor} did not advance -- refusing to loop"
+      end
       pages += 1
       if pages > max_pages
-        raise "paginate_all: exceeded #{max_pages} pages -- refusing to return a partial answer silently"
+        raise PaginationError,
+              "paginate_all: exceeded #{max_pages} pages -- refusing to return a " \
+              "partial answer silently"
       end
       token = nxt
     end

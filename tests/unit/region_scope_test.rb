@@ -115,7 +115,7 @@ stuck = 0
 begin
   probe.paginate_all(args: {}) { stuck += 1; Struct::Page.new("same", [0]) }
   check("paginate_all -> raises on a stuck cursor", false, true)
-rescue RuntimeError => e
+rescue RegionScope::PaginationError => e
   check("paginate_all -> raises on a stuck cursor", e.message.include?("did not advance"), true)
 end
 
@@ -124,7 +124,7 @@ begin
   n = 0
   probe.paginate_all(args: {}, max_pages: 3) { n += 1; Struct::Page.new("t#{n}", [n]) }
   check("paginate_all -> raises past the page ceiling", false, true)
-rescue RuntimeError => e
+rescue RegionScope::PaginationError => e
   check("paginate_all -> raises past the page ceiling", e.message.include?("partial answer"), true)
 end
 
