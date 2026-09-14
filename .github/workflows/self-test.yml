@@ -1,0 +1,55 @@
+name: Self-test (full pipeline)
+
+# Runs THIS profile end to end on demand: exec -> HDF -> evidence, in the pinned
+# sparc-auditor container, against a real account.
+#
+# Why it exists. exec-evidence.yml is workflow_call by design -- it is published
+# for consumers, and each README documents calling it. Nothing in this repository
+# called it, so no pull request ever EXEC'd the profile: `profile-lint` runs
+# cinc-auditor check and json, and both only LOAD a control. That is how region
+# blindness and silent truncation survived here for months -- they are invisible
+# to a loader and only appear when the profile actually runs.
+#
+# This is a CALLER, not an edit to exec-evidence.yml: the published contract for
+# consumers is unchanged, and this file doubles as a worked example of it.
+#
+# A profile is verified by a full pipeline run, never by a bare `exec`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws_region:
+        description: >-
+          Region for the aws:// scan. Deliberately undefaulted: a wrong region
+          does not error, it reads an empty account and reports a clean result.
+        type: string
+        required: true
+      boundary:
+        description: 'Evidence boundary label. Decides where results land.'
+        type: string
+        required: true
+      target:
+        description: 'What is being assessed -- account alias or name, not an ARN.'
+        type: string
+        required: true
+      inputs_file:
+        description: 'Inputs file supplying scan_regions and profile scope.'
+        type: string
+        default: inputs/example.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  self-test:
+    uses: ./.github/workflows/exec-evidence.yml
+    with:
+      target:          ${{ inputs.target }}
+      boundary:        ${{ inputs.boundary }}
+      aws_region:      ${{ inputs.aws_region }}
+      inputs_file:     ${{ inputs.inputs_file }}
+      profile_name:    stig-aws-ecr-v2r4
+      profile_version: '0.1.0'
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_CI_EXECUTE_ROLE_ARN }}

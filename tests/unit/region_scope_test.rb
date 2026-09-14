@@ -94,6 +94,40 @@ regions, error = probe.resolve_region_scope(aws, ["  ", ""])
 check("whitespace-only -> no regions",         regions, [])
 check("whitespace-only -> error is set",       !error.nil?, true)
 
+# --- paginate_all must FOLLOW the cursor, and must refuse partial answers.
+#
+# Locking this in because a single-page read is the same defect as a
+# single-region read: a control passes against a partial set and nothing in the
+# evidence says the answer was cut off.
+Struct.new("Page", :next_token, :items) unless defined?(Struct::Page)
+
+pages = [Struct::Page.new("t1", [1]), Struct::Page.new("t2", [2]), Struct::Page.new(nil, [3])]
+seen_tokens = []
+got = probe.paginate_all(args: {}) do |a|
+  seen_tokens << a[:next_token]
+  pages.shift
+end
+check("paginate_all -> follows the cursor to the end", got.flat_map(&:items), [1, 2, 3])
+check("paginate_all -> passes each token back",        seen_tokens,           [nil, "t1", "t2"])
+
+# A cursor that never advances must raise, not spin and not truncate silently.
+stuck = 0
+begin
+  probe.paginate_all(args: {}) { stuck += 1; Struct::Page.new("same", [0]) }
+  check("paginate_all -> raises on a stuck cursor", false, true)
+rescue RuntimeError => e
+  check("paginate_all -> raises on a stuck cursor", e.message.include?("did not advance"), true)
+end
+
+# And it must not silently stop early on a very long list.
+begin
+  n = 0
+  probe.paginate_all(args: {}, max_pages: 3) { n += 1; Struct::Page.new("t#{n}", [n]) }
+  check("paginate_all -> raises past the page ceiling", false, true)
+rescue RuntimeError => e
+  check("paginate_all -> raises past the page ceiling", e.message.include?("partial answer"), true)
+end
+
 puts
 if FAILURES.empty?
   puts "region scope: OK (explicit, sweep, and the refusal — both directions)"
