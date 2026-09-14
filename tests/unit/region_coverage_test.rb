@@ -212,9 +212,18 @@ MANIFEST.fetch("resources").each do |e|
   w = e.fetch("watch")
   key = "#{w.fetch('service')}/#{w.fetch('operation')}"
   OBSERVED[key].clear
+  # A region-swept resource is handed `regions:` by its control, via
+  # `input('scan_regions')`. Construct it the same way, or the resource correctly
+  # refuses an empty scope and reports zero calls — which reads as region-blind
+  # when it is in fact the fail-closed contract doing its job.
+  #
+  # Only for `enforced` entries: those are exactly the resources that sweep.
+  # Anything else either ignores the argument or does not accept it.
+  ctor_args = status == "enforced" ? args.merge(regions: REGIONS) : args
+
   begin
     Timeout.timeout(RESOURCE_TIMEOUT_SECONDS, ResourceHang) do
-      args.empty? ? klass.new : klass.new(**args)
+      ctor_args.empty? ? klass.new : klass.new(**ctor_args)
     end
   rescue ResourceHang
     # Always fatal, never downgraded by status. An unexplained hang is not a
