@@ -73,3 +73,14 @@ inherited_evidence_uri: ''
 
 # How old the leveraged evidence may be before it stops counting as current.
 leveraged_evidence_max_age_days: 365
+
+# Regions to assess. REQUIRED -- an empty value is an error, not a fallback:
+# the profile refuses to assess a single region silently, because nothing in the
+# resulting evidence would distinguish "we looked and found nothing" from "we did
+# not look".
+#
+# "*" sweeps every enabled region in the partition and narrows to GovCloud
+# automatically. Replace it with an explicit list to scan faster and to state the
+# assessed scope where an assessor can read it.
+scan_regions:
+  - "*"

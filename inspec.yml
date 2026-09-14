@@ -45,6 +45,13 @@ inputs:
   - name: aws_partition
     type: string
     value: aws                 # aws | aws-us-gov
+  - name: scan_regions
+    type: array
+    value: []                  # REQUIRED. ECR is regional: each region has its own
+                               # registry, so a repository elsewhere is simply never
+                               # seen and the control passes having found nothing.
+                               # Empty is an ERROR, not a fallback. Use ["*"] to
+                               # sweep every enabled region in the partition.
   - name: assessed_repositories
     type: array
     value: []                  # optional allowlist of ECR repo names; empty = all in-account repos

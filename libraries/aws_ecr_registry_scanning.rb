@@ -10,6 +10,7 @@
 #   end
 
 class AwsEcrRegistryScanning < AwsResourceBase
+  include RegionScope
   name "aws_ecr_registry_scanning"
   desc "Registry-level ECR scanning configuration (basic vs enhanced/Inspector)."
   example "
@@ -18,16 +19,36 @@ class AwsEcrRegistryScanning < AwsResourceBase
     end
   "
 
-  attr_reader :scan_type, :rules
+  attr_reader :scan_type, :rules, :per_region
 
   def initialize(opts = {})
+    opts = opts.dup
+    region_override = Array(opts.delete(:regions))
     super(opts)
     @rules = []
-    catch_aws_errors do
-      cfg        = @aws.ecr_client.get_registry_scanning_configuration.scanning_configuration
-      @scan_type = cfg.scan_type
-      @rules     = Array(cfg.rules)
+    @per_region = {}
+
+    # Each region has its OWN registry and its own scanning configuration, so a
+    # single call returns a perfectly valid config -- for one region. That is the
+    # most misleading shape this defect takes: nothing about the result looks
+    # wrong, and the control passes having described one registry out of several.
+    @all_regions = region_scope_or_fail!(@aws, region_override)
+    each_region_client(::Aws::ECR::Client) do |client, region|
+      cfg = client.get_registry_scanning_configuration.scanning_configuration
+      next if cfg.nil?
+      @per_region[region] = { scan_type: cfg.scan_type, rules: Array(cfg.rules) }
+      @rules.concat(Array(cfg.rules))
     end
+
+    # Weakest posture across regions wins: a registry that is BASIC anywhere is
+    # not ENHANCED everywhere, and reporting the strongest would hide the gap.
+    types = @per_region.values.map { |v| v[:scan_type].to_s }.reject(&:empty?)
+    @scan_type = types.include?("BASIC") ? "BASIC" : types.first
+  end
+
+  # Regions whose registry is not ENHANCED, so a gap names where it is.
+  def regions_not_enhanced
+    @per_region.reject { |_r, v| v[:scan_type].to_s == "ENHANCED" }.keys.sort
   end
 
   # ENHANCED = Amazon Inspector continuous/on-push deep scanning.

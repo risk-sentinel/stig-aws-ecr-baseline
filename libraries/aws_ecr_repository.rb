@@ -18,6 +18,7 @@ require "set"   # Enumerable#to_set — autoloaded in Ruby 3.4, explicit here so
                 # resource does not depend on the runtime's autoload behaviour.
 
 class AwsEcrRepository < AwsResourceBase
+  include RegionScope
   name "aws_ecr_repository"
   desc "Configuration + policy posture of a single ECR repository."
   example "
@@ -32,13 +33,39 @@ class AwsEcrRepository < AwsResourceBase
 
   def initialize(opts = {})
     opts = { repository_name: opts } if opts.is_a?(String)
+    opts = opts.dup
+    region_override = Array(opts.delete(:regions))
+    explicit_region = opts.delete(:region)
     super(opts)
     validate_parameters(required: %i[repository_name])
     @repository_name = opts[:repository_name]
     @exists = false
+    @found_in_regions = []
+
+    # A repository name is only unique WITHIN a region -- two regions can hold
+    # one of the same name. So rather than assume a region, find which region(s)
+    # actually hold it, and record that. An explicit `region:` (or an ARN, via
+    # client_region_for) short-circuits the search when the caller already knows.
+    #
+    # Silently picking one region would be the original defect in miniature:
+    # the control would report on a repository that may not be the one meant.
+    targeted = client_region_for(@repository_name, explicit_region)
+    @all_regions = targeted ? [targeted] : region_scope_or_fail!(@aws, region_override)
+
+    each_region_client(::Aws::ECR::Client) do |c, region|
+      probe = c.describe_repositories(repository_names: [@repository_name]) rescue nil
+      next if probe.nil? || probe.repositories.to_a.empty?
+      @found_in_regions << region
+      @client ||= c
+      @region ||= region
+    end
+    # Not found in any scanned region: fall back to the default-region client so
+    # describe_repositories raises RepositoryNotFoundException and the control
+    # reports "not found" rather than crashing on a nil client.
+    @client ||= @aws.ecr_client
 
     catch_aws_errors do
-      resp = @aws.ecr_client.describe_repositories(repository_names: [@repository_name])
+      resp = @client.describe_repositories(repository_names: [@repository_name])
       repo = resp.repositories.first
       next if repo.nil?
 
@@ -52,17 +79,26 @@ class AwsEcrRepository < AwsResourceBase
       @kms_key              = enc&.kms_key
 
       @policy_text = begin
-        @aws.ecr_client.get_repository_policy(repository_name: @repository_name).policy_text
+        @client.get_repository_policy(repository_name: @repository_name).policy_text
       rescue Aws::ECR::Errors::RepositoryPolicyNotFoundException
         nil
       end
 
       @lifecycle_policy_text = begin
-        @aws.ecr_client.get_lifecycle_policy(repository_name: @repository_name).lifecycle_policy_text
+        @client.get_lifecycle_policy(repository_name: @repository_name).lifecycle_policy_text
       rescue Aws::ECR::Errors::LifecyclePolicyNotFoundException
         nil
       end
     end
+  end
+
+  # The region this repository was read from, and every region it was found in.
+  # More than one means the NAME is ambiguous across regions -- a control
+  # asserting on it should say which region it meant.
+  attr_reader :region, :found_in_regions
+
+  def ambiguous_across_regions?
+    @found_in_regions.size > 1
   end
 
   def exists?
@@ -115,7 +151,7 @@ class AwsEcrRepository < AwsResourceBase
     catch_aws_errors do
       next_token = nil
       loop do
-        resp = @aws.ecr_client.describe_images(repository_name: @repository_name, next_token: next_token, max_results: 100)
+        resp = @client.describe_images(repository_name: @repository_name, next_token: next_token, max_results: 100)
         Array(resp.image_details).each do |d|
           # Every imageDetail's tags are collected FIRST — cosign pushes
           # signatures and attestations as separate TAGGED artifacts in this
@@ -319,7 +355,7 @@ class AwsEcrRepository < AwsResourceBase
 
   def native_signed?(digest)
     @signing_error = nil
-    !Array(@aws.ecr_client.describe_image_signing_status(
+    !Array(@client.describe_image_signing_status(
       repository_name: @repository_name, image_id: { image_digest: digest }
     ).signing_statuses).empty?
   rescue StandardError => e
@@ -371,7 +407,7 @@ class AwsEcrRepository < AwsResourceBase
     refs = []
     token = nil
     loop do
-      resp = @aws.ecr_client.list_image_referrers(
+      resp = @client.list_image_referrers(
         repository_name: @repository_name, subject_id: { image_digest: digest }, next_token: token
       )
       refs.concat(Array(resp.referrers))

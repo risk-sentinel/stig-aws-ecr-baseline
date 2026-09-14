@@ -10,20 +10,17 @@
 #   watch  - NEVER watch describe_regions: it is the one-off discovery call made
 #            against the default client and proves nothing about the walk.
 #
-# All three resources here are currently region-blind (#38). ECR is a regional
-# service with a per-region registry, so a repository in another region is
-# simply never seen — and the control passes having found nothing, which HDF
-# renders as "does not apply here" rather than "we did not look".
+# All three resources now enumerate regions (#38 fixed). ECR is regional with a
+# per-region registry, so a repository in another region was simply never seen —
+# and the control passed having found nothing, which HDF renders as "does not
+# apply here" rather than "we did not look".
 #
-# This repository has no resource that already enumerates regions, so unlike the
-# other profiles there is no in-tree reference here. The pattern to copy lives in
-# cis-aws-foundations-baseline/libraries/_region_enumeration.rb.
-#
-# OPEN JUDGEMENT CALL, recorded rather than decided: aws_ecr_repository takes a
-# required `repository_name` and looks one repository up by name. Sweeping every
-# region may be wrong — two regions can hold repositories of the same name, and
-# the caller may mean a specific one. Resolving the region from the caller may
-# be the better answer, as cis-rhel-9-baseline does from its scan target.
+# The judgement call on aws_ecr_repository is RESOLVED rather than left open. A
+# repository name is unique only WITHIN a region, so instead of assuming one, it
+# now finds which region(s) actually hold the name and records them. More than
+# one sets ambiguous_across_regions?, so a control asserting on it can say which
+# region it meant instead of silently reporting on whichever was found first.
+# An explicit `region:` or an ARN short-circuits the search.
 
 regions: [us-east-1, us-west-2, eu-west-1]
 
@@ -41,7 +38,7 @@ resources:
       # empty stub returns nil and raises NoMethodError before the walk is
       # reached, which reads as a broken resource rather than a thin stub.
       payload: { scanning_configuration: { scan_type: "BASIC", rules: [] } }
-    status: known_blind
+    status: enforced
 
   - resource: aws_ecr_repositories
     klass: AwsEcrRepositories
@@ -49,7 +46,7 @@ resources:
       service: ecr
       operation: describe_repositories
       payload: { repositories: [] }
-    status: known_blind
+    status: enforced
 
   - resource: aws_ecr_repository
     klass: AwsEcrRepository
@@ -58,4 +55,4 @@ resources:
       service: ecr
       operation: describe_repositories
       payload: { repositories: [] }
-    status: known_blind
+    status: enforced

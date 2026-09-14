@@ -91,6 +91,15 @@ jobs:
             || { echo "::error::json produced no controls"; exit 1; }
           echo "json loaded $(jq '.controls | length' /tmp/profile.json) controls"
 
+      - name: Region scope contract (stubbed AWS, no credentials)
+        # scan_regions decides what gets assessed, so its contract is evidence.
+        # Asserts the refusal on an empty list as well as the passing cases.
+        run: |
+          set -uo pipefail
+          docker run --rm -v "$PWD:/work" -w /work \
+            --entrypoint /opt/cinc-workstation/embedded/bin/ruby \
+            "${AUDITOR_IMAGE}" tests/unit/region_scope_test.rb
+
       - name: Region coverage (stubbed AWS, no credentials)
         # `check` and `json` only LOAD a resource. Neither can observe which AWS
         # calls it makes, so neither can tell a resource that walks every enabled
