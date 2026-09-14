@@ -174,11 +174,24 @@ def install_stubs!(entries)
 end
 
 def load_profile_libraries!
-  # Underscore-prefixed helper libraries load first in InSpec's alphabetical
-  # order and define the modules resources `include` (e.g. RegionEnumeration).
-  # Evaluating a resource without them raises NameError, which would look like a
-  # broken resource rather than a harness that loaded things out of order.
-  Dir.glob("libraries/_*.rb").sort.each { |f| eval(File.read(f), TOPLEVEL_BINDING, f) } # rubocop:disable Security/Eval
+  # Load EVERY library file, in alphabetical order, exactly as InSpec does.
+  #
+  # Loading only the underscore-prefixed helpers was not enough: resources also
+  # depend on plain library files — aws_secretsmanager_secret_policy needs
+  # IamPolicyStatement from libraries/iam_policy_statement.rb — and the missing
+  # constant surfaces as a NameError that reads like a broken resource rather
+  # than a harness that loaded less than the real runtime does.
+  #
+  # Underscore names still sort first, which is why the convention exists.
+  Dir.glob("libraries/*.rb").sort.each do |f|
+    begin
+      eval(File.read(f), TOPLEVEL_BINDING, f) # rubocop:disable Security/Eval
+    rescue StandardError, ScriptError => e
+      # Report rather than abort: one unloadable library must not hide the
+      # coverage answer for every other resource in the manifest.
+      warn "  note  could not load #{f}: #{e.class}: #{e.message}"
+    end
+  end
 end
 
 install_stubs!(MANIFEST.fetch("resources"))
