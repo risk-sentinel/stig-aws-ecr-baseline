@@ -1,0 +1,131 @@
+name: Release artifact
+
+# Publish an OFFLINE-CAPABLE copy of this profile as a release asset.
+#
+# Why this exists. A consumer on an air-gapped network can reach their own AWS
+# accounts but cannot reach github.com. Everything this profile needs at scan
+# time is already local once its dependencies are vendored — the only thing that
+# ever reaches GitHub is `cinc-auditor vendor`, and that happens here, in CI,
+# where the network exists. The asset this job attaches carries the profile AND
+# its vendored resource pack, so a consumer transfers one file and runs it.
+#
+# Measured, not assumed: with github.com blackholed and AWS reachable, a
+# vendored profile execs normally and fails at nothing. Without the vendored
+# pack it dies at `cannot load such file -- aws_backend`.
+#
+# ---- Using the asset ---------------------------------------------------------
+#
+#   tar xzf <profile>-<tag>.tar.gz -C <dir>
+#   cd <dir>
+#   cinc-auditor exec . -t aws:// --input-file inputs/example.yml
+#
+# EXTRACT FIRST, then run from INSIDE the directory. Executing the .tar.gz path
+# directly does not work: `libraries/_aws_backend_bootstrap.rb` locates the
+# vendored pack by globbing `Dir.pwd`, and an archive exec unpacks somewhere
+# else, so the glob finds nothing. Extracting and `cd`-ing in makes `Dir.pwd`
+# the profile root, which is the shape the glob expects.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and attach the asset to.'
+        type: string
+        required: true
+
+permissions:
+  contents: write   # attaching an asset to a release is a write
+
+env:
+  AUDITOR_IMAGE: risksentinel/sparc-auditor:v1.2.1
+
+jobs:
+  archive:
+    name: Build + verify the offline archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Docker Hub login (auditor image pull)
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          # Optional. The auditor image is public, so an anonymous pull works;
+          # signing in only raises the shared rate limit. Without this guard an
+          # adopter with no Docker Hub secrets fails here, before anything runs.
+          if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "::notice::No Docker Hub credentials set; pulling anonymously."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Build the archive
+        id: build
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          NAME="$(awk '/^name:/{sub(/^name:[[:space:]]+/,""); print; exit}' inspec.yml)"
+          [ -n "$NAME" ] || { echo "::error::inspec.yml has no name:"; exit 1; }
+          ART="${NAME}-${TAG}.tar.gz"
+          mkdir -p dist
+
+          # `archive` vendors first, so this is the step that needs the network.
+          docker run --rm -v "$PWD:/work" -w /work -e CHEF_LICENSE=accept-silent \
+            "$AUDITOR_IMAGE" archive . --tar -o "/work/dist/${ART}" --overwrite
+
+          [ -s "dist/${ART}" ] || { echo "::error::archive was not produced"; exit 1; }
+          echo "tag=${TAG}"  >> "$GITHUB_OUTPUT"
+          echo "art=${ART}"  >> "$GITHUB_OUTPUT"
+          echo "Built dist/${ART} ($(du -h "dist/${ART}" | cut -f1))"
+
+      - name: Gate — the archive carries every declared dependency
+        run: |
+          set -euo pipefail
+          ART="dist/${{ steps.build.outputs.art }}"
+          # A profile with no `depends:` (a host or forge profile) has nothing to
+          # carry, and that is not a failure. One WITH depends whose archive has
+          # no vendor/ is the failure this gate exists for: it would transfer
+          # cleanly, extract cleanly, and die on the consumer's air-gapped host.
+          if grep -q '^depends:' inspec.yml; then
+            n="$(tar tzf "$ART" | grep -c '^vendor/' || true)"
+            [ "$n" -gt 0 ] || { echo "::error::inspec.yml declares depends: but the archive carries no vendor/ — it cannot run offline"; exit 1; }
+            echo "archive carries ${n} vendored path(s)"
+          else
+            echo "::notice::this profile declares no depends:, so there is no resource pack to carry"
+          fi
+
+      - name: Gate — it loads with the network switched off
+        run: |
+          set -euo pipefail
+          ART="dist/${{ steps.build.outputs.art }}"
+          rm -rf /tmp/x && mkdir -p /tmp/x
+          tar xzf "$ART" -C /tmp/x
+
+          # The claim this asset makes is "runs without GitHub". `--network none`
+          # is the only honest way to test that claim, and `json` is the right
+          # probe: it loads every control and every library — including the
+          # vendored resource pack — without reaching a cloud provider and
+          # without credentials. If the pack were missing this fails here with
+          # `cannot load such file -- aws_backend`, which is exactly the error a
+          # consumer would otherwise hit on their own network.
+          docker run --rm --network none -v /tmp/x:/work -w /work \
+            -e CHEF_LICENSE=accept-silent "$AUDITOR_IMAGE" json . > /tmp/offline.json
+
+          n="$(python3 -c 'import json,sys; print(len(json.load(open("/tmp/offline.json"))["controls"]))')"
+          [ "$n" -gt 0 ] || { echo "::error::loaded offline but reported 0 controls — the asset assesses nothing"; exit 1; }
+          echo "loaded ${n} control(s) with no network"
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ steps.build.outputs.tag }}" \
+            "dist/${{ steps.build.outputs.art }}" --clobber
+          echo "Attached ${{ steps.build.outputs.art }} to ${{ steps.build.outputs.tag }}"

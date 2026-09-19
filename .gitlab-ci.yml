@@ -40,14 +40,14 @@ include:
   - local: /.gitlab-variables.yml
 
   # ---- This repository's evidence jobs --------------------------------------
-  - local: /ci/gitlab/sonarqube-hdf-emit.yml
+  - local: /ci/jobs/sonarqube-hdf-emit.yml
 
   # ---- Profile execution — uncomment and set the target ---------------------
   # Not enabled by default, and not because it was forgotten: `target` has no
   # default anywhere in this estate. Defaulting it would run the profile against
   # something that is not your system and report the result as though it were.
   #
-  # - local: /ci/gitlab/exec-evidence.yml
+  # - local: /ci/jobs/exec-evidence.yml
   #   inputs:
   #     target: my-account          # what is being assessed. Not an ARN.
   #     profile_name: stig-aws-ecr-v2r4
@@ -79,7 +79,7 @@ pipeline-coverage:
         echo "SonarQube -> HDF          : SKIPPED - SONAR_TOKEN is not set."
         echo "                            Settings > CI/CD > Variables, masked."
       fi
-      if grep -qE '^\s*-\s*local:\s*/ci/gitlab/exec-evidence\.yml' .gitlab-ci.yml; then
+      if grep -qE '^\s*-\s*local:\s*/ci/jobs/exec-evidence\.yml' .gitlab-ci.yml; then
         echo "Profile exec evidence     : ENABLED"
       else
         echo "Profile exec evidence     : NOT CONFIGURED - uncomment the block in"

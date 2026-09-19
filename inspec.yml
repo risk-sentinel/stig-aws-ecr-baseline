@@ -39,7 +39,7 @@ supports:
 depends:
   - name: inspec-aws
     git: https://github.com/inspec/inspec-aws.git
-    branch: main
+    tag: v1.83.63
 
 inputs:
   - name: aws_partition

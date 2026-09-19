@@ -5,7 +5,7 @@
 #   include:
 #     - project: <your-org>/stig-aws-ecr-baseline
 #       ref: v0.1.7
-#       file: /ci/gitlab/exec-evidence.yml
+#       file: /ci/jobs/exec-evidence.yml
 #       inputs:
 #         target: my-account
 #         profile_name: stig-aws-ecr-v2r4
@@ -55,6 +55,18 @@ spec:
       description: >-
         Region for aws:// scans and for any cloud-evidence reads. Region is environment-specific and deliberately undefaulted: a wrong region does not error, it reads an empty account and reports a clean result.
         GitLab refuses the include when it is missing.
+    profile_source:
+      description: >-
+        git | archive. `git` vendors from the declared remotes. `archive` unpacks a
+        release artifact that already carries its dependencies and contacts no
+        remote -- for a consumer who can reach their cloud account but not
+        github.com. archive never falls back to git.
+      default: git
+    archive_path:
+      description: >-
+        Path on the runner to the release .tar.gz, when profile_source=archive.
+        Fetch it in an earlier job from wherever your network keeps it.
+      default: ""
     image:
       description: Pinned auditor image supplying cinc-auditor, hdf, saf and jq.
       default: risksentinel/sparc-auditor:v1.2.1
@@ -72,6 +84,8 @@ spec:
     SCAN_TYPE: "$[[ inputs.scan_type ]]"
     SCAN_MODE: "$[[ inputs.scan_mode ]]"
     TARGET_URI: "$[[ inputs.target_uri ]]"
+    PROFILE_SOURCE: "$[[ inputs.profile_source ]]"
+    ARCHIVE_PATH: "$[[ inputs.archive_path ]]"
     PROFILE: "$[[ inputs.profile_name ]]"
     PROFILE_VERSION: "$[[ inputs.profile_version ]]"
     BENCHMARK: "$[[ inputs.benchmark ]]"
@@ -125,7 +139,37 @@ spec:
         echo "inputs file not found: $INPUTS_FILE -- point inputs_file at a file that exists in the profile, or copy inputs/example.yml and edit it." >&2
         exit 1
       fi
-      cinc-auditor vendor . --overwrite
+      # Where the profile comes from. `git` vendors from the declared remotes and
+      # needs the network to reach them. `archive` unpacks a release artifact that
+      # already carries its vendored dependencies, so nothing is fetched.
+      #
+      # archive NEVER falls back to git. A missing archive fails the job: falling
+      # back would quietly defeat the isolation the mode exists for, while still
+      # reporting a successful scan.
+      case "${PROFILE_SOURCE:-git}" in
+        git)
+          cinc-auditor vendor . --overwrite
+          ;;
+        archive)
+          if [ -z "${ARCHIVE_PATH:-}" ] || [ ! -s "${ARCHIVE_PATH}" ]; then
+          echo "ERROR: profile_source=archive but no archive at '${ARCHIVE_PATH:-<empty>}'. Refusing to vendor from the network instead." >&2; exit 1
+          fi
+          # Unpacked OVER the checkout rather than into a subdirectory: the archive
+          # holds this same profile plus its vendor/ tree, and
+          # _aws_backend_bootstrap.rb finds the vendored pack by globbing Dir.pwd,
+          # so the profile root has to stay the working directory.
+          if ! tar xzf "${ARCHIVE_PATH}" -C .; then
+          echo "ERROR: archive did not extract: ${ARCHIVE_PATH}" >&2; exit 1
+          fi
+          if grep -q "^depends:" inspec.yml && [ ! -d vendor ]; then
+          echo "ERROR: archive declares depends: but carries no vendor/ -- it would reach the network at exec." >&2; exit 1
+          fi
+          echo "profile source: archive (${ARCHIVE_PATH}) -- no remote contacted"
+          ;;
+        *)
+          echo "ERROR: profile_source must be 'git' or 'archive', got '${PROFILE_SOURCE}'" >&2; exit 1
+          ;;
+      esac
       cinc-auditor exec . -t "$TARGET_URI" --input-file "$INPUTS_FILE" \
         --reporter cli json:results.json || true
       FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

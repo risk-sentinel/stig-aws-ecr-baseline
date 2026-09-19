@@ -1,7 +1,7 @@
 # CI templates — how they are built, and why
 
 Each profile repository carries its own copy of the CI templates under
-`.github/workflows/` and `ci/gitlab/`. This page holds the design reasoning, so
+`.github/workflows/` and `ci/jobs/`. This page holds the design reasoning, so
 the templates themselves can stay short enough to read before using them.
 
 ## Required configuration
@@ -98,7 +98,7 @@ in the YAML is what makes the pattern portable between forges, and between
 "include it" and "clone it on the fly".
 
 The cost is that `.github/workflows/exec-evidence.yml` and
-`ci/gitlab/exec-evidence.yml` carry the same shell. That duplication is
+`ci/jobs/exec-evidence.yml` carry the same shell. That duplication is
 intentional and preferable to a dependency a consumer cannot satisfy.
 
 ## Order of steps in the evidence workflows

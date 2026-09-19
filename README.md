@@ -94,6 +94,76 @@ treated as "clean", which is deliberate and occasionally surprising.
 
 ---
 
+## Running without GitHub access
+
+Every release carries a `.tar.gz` asset, built and verified by
+`.github/workflows/release-artifact.yml`.
+
+It holds this profile **and its vendored dependencies**, so running it
+contacts no remote at all — the shape for a consumer who can reach their own
+accounts or hosts but cannot reach github.com.
+
+Assets are attached to every release cut **after this workflow landed**; earlier
+releases have none.
+
+```bash
+VERSION=<the release you want>
+
+# once, from somewhere that CAN reach GitHub
+curl -LO https://github.com/risk-sentinel/stig-aws-ecr-baseline/releases/download/$VERSION/stig-aws-ecr-v2r4-$VERSION.tar.gz
+
+# then, on the isolated side
+mkdir -p stig-aws-ecr-v2r4 && tar xzf stig-aws-ecr-v2r4-$VERSION.tar.gz -C stig-aws-ecr-v2r4
+cd stig-aws-ecr-v2r4
+cinc-auditor exec . -t aws:// --input-file inputs/example.yml
+```
+
+**Extract it, then run from inside the directory.** Executing the `.tar.gz` path
+directly fails with `cannot load such file -- aws_backend`, because
+`libraries/_aws_backend_bootstrap.rb` locates the vendored pack by globbing
+`Dir.pwd` and an archive exec unpacks somewhere else.
+
+The asset is verified before it is attached: the release job rejects an archive
+that declares `depends:` but carries no `vendor/`, and it rejects one that will
+not **load with the network switched off**. A tarball that exists is not a
+tarball that works.
+
+### From CI
+
+Both templates take `profile_source`, defaulting to `git` — existing callers are
+unaffected:
+
+| value | behaviour |
+| --- | --- |
+| `git` | Vendor from the declared remotes. Needs to reach them. |
+| `archive` | Unpack a release artifact. Contacts no remote. Requires `archive_path`. |
+
+`archive` **never falls back to `git`.** An empty or missing `archive_path` fails
+the job, as does an archive that declares dependencies but carries none. A
+fallback would defeat the isolation the mode exists for *and* still report a
+successful scan.
+
+GitHub Actions:
+
+```yaml
+uses: risk-sentinel/stig-aws-ecr-baseline/.github/workflows/exec-evidence.yml@<version>
+with:
+  profile_source: archive
+  archive_path: ./stig-aws-ecr-v2r4-<version>.tar.gz
+```
+
+GitLab:
+
+```yaml
+include:
+  - project: <your-org>/stig-aws-ecr-baseline
+    ref: <version>
+    file: /ci/jobs/exec-evidence.yml
+    inputs:
+      profile_source: archive
+      archive_path: ./stig-aws-ecr-v2r4-<version>.tar.gz
+```
+
 ## Producing evidence
 
 A `--reporter cli` run tells you the answer. It does not produce something an
@@ -124,7 +194,7 @@ jobs:
 include:
   - project: risk-sentinel/stig-aws-ecr-baseline
     ref: v0.1.7
-    file: /ci/gitlab/exec-evidence.yml
+    file: /ci/jobs/exec-evidence.yml
     inputs:
       target: my-registry-account
       boundary: my-boundary
