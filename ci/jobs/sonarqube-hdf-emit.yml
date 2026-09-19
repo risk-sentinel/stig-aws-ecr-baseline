@@ -6,7 +6,7 @@
 #   include:
 #     - project: <your-org>/stig-aws-ecr-baseline
 #       ref: main
-#       file: /ci/gitlab/sonarqube-hdf-emit.yml
+#       file: /ci/jobs/sonarqube-hdf-emit.yml
 #       inputs:
 #         sonar_project_key: my-group_my-project
 #

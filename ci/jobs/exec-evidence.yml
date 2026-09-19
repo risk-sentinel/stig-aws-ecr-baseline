@@ -5,7 +5,7 @@
 #   include:
 #     - project: <your-org>/stig-aws-ecr-baseline
 #       ref: v0.1.7
-#       file: /ci/gitlab/exec-evidence.yml
+#       file: /ci/jobs/exec-evidence.yml
 #       inputs:
 #         target: my-account
 #         profile_name: stig-aws-ecr-v2r4
