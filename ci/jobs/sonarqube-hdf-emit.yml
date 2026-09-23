@@ -142,7 +142,7 @@ spec:
       set -euo pipefail
       . ./.hdf-env
       test -s "$HDF_FILE"
-      hdf validate "$HDF_FILE" -q
+      hdf validate "$HDF_FILE" --type results -q
       echo "OHDF schema-valid: $HDF_FILE"
 
     - |

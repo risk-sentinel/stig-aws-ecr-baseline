@@ -212,7 +212,7 @@ jobs:
           # validation correctly accepts it. That is the point: "we looked and
           # found nothing" must be recordable, or a clean repo and a broken
           # pipeline leave identical traces.
-          hdf validate "$HDF_FILE" -q
+          hdf validate "$HDF_FILE" --type results -q
           echo "OHDF schema-valid."
 
       - name: Upload HDF artifact
