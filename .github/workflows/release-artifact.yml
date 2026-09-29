@@ -39,7 +39,7 @@ permissions:
   contents: write   # attaching an asset to a release is a write
 
 env:
-  AUDITOR_IMAGE: risksentinel/sparc-auditor:v1.2.1
+  AUDITOR_IMAGE: risksentinel/sparc-auditor:v1.4.0
 
 jobs:
   archive:

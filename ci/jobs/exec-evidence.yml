@@ -69,7 +69,7 @@ spec:
       default: ""
     image:
       description: Pinned auditor image supplying cinc-auditor, hdf, saf and jq.
-      default: risksentinel/sparc-auditor:v1.2.1
+      default: risksentinel/sparc-auditor:v1.4.0
     job_name:
       description: Name of the generated job, so a caller can include this template twice.
       default: profile-exec-evidence
