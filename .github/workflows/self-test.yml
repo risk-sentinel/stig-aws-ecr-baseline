@@ -52,4 +52,9 @@ jobs:
       profile_name:    stig-aws-ecr-v2r4
       profile_version: '0.1.0'
     secrets:
-      AWS_ROLE_ARN: ${{ secrets.AWS_CI_EXECUTE_ROLE_ARN }}
+      # This repository's own READ-ONLY scan role (SecurityAudit + ViewOnlyAccess),
+      # trusted for this repo by id so a rename cannot break it (sparc-iac#767).
+      # Previously AWS_CI_EXECUTE_ROLE_ARN: the ci-execute DEPLOY role, which is
+      # assumable only by ci-trust, never by OIDC — so no self-test ever ran
+      # (risk-sentinel/sparc-validate#458).
+      AWS_ROLE_ARN: ${{ secrets.STIG_AWS_ECR_BASELINE_SCAN_ARN }}
