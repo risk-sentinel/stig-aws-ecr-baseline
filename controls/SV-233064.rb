@@ -24,7 +24,7 @@ control 'SV-233064' do
  tag 'documentable'
  tag cci: ['CCI-003992']
  tag nist: ['CM-14']
- tag nist_r4_unmapped: ['CM-14']
+ tag nist_r4: ['CM-5 (3)']
  tag implementation_status: 'implemented'
  tag fsbp: 'n/a'
 
