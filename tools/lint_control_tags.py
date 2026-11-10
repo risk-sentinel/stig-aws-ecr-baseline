@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-r"""Fail on a control whose compliance tags are incomplete, duplicated, or non-literal.
+r"""Fail on a control whose compliance tags are incomplete, duplicated, non-literal,
+or disagree with each other.
 
-Three defect classes, all of which have shipped from this fleet, and none of
+Four defect classes, all of which have shipped from this fleet, and none of
 which `cinc-auditor check` or `json` can see.
 
 **A missing anchor is silent.** `tag nist:` is Rev 5; `tag nist_r4:` is the Rev 4
@@ -29,6 +30,13 @@ the AST at parse time and calls `.value` on the node:
 passes both `check` AND `json` while emitting `[None]` -- a tag that looks
 present and carries nothing.
 
+**A NIST tag its CCIs do not support.** `tag cci:` and `tag nist:` describe the
+same requirement at two granularities, and a consumer may join on either. Every
+CCI maps to exactly one Rev 5 part; `tag nist:` must be exactly the set its CCIs
+map to. A base control where Rev 5 assesses parts (`AU-12` for `AU-12 a`), a part
+lettered from Rev 4, or a CCI picked for a different control all fail here. The
+mapping ships beside this file as cci_to_nist.json, so the check needs no network.
+
 Two things this linter must NOT flag, both of which the first version got wrong:
 
 * **A tag set in each arm of a conditional.** `if mode == 'container_only'` ...
@@ -44,9 +52,14 @@ Usage:
     python3 tools/lint_control_tags.py            # defaults to controls/
     python3 tools/lint_control_tags.py controls
 """
+import json
 import re
 import sys
 from pathlib import Path
+
+# CCI -> Rev 5 label, from MITRE Heimdall's CciNistMappingData.ts. A fixed file
+# beside this one, not an argument.
+CCI_MAP = Path(__file__).resolve().parent / "cci_to_nist.json"
 
 CONTROL = re.compile(r"^\s*control\s+['\"]([^'\"]+)", re.M)
 TAG_START = re.compile(r"^([ \t]*)tag[ \t]+([a-z_][a-z0-9_]*)[ \t]*:[ \t]*", re.I)
@@ -160,11 +173,48 @@ def tag_occurrences(block):
     return occurrences
 
 
-def violations(path):
+def literal_list(raw):
+    """The string elements of a literal array value, unquoted."""
+    if not (raw.startswith("[") and raw.endswith("]")):
+        return None
+    return [p[1:-1] for p in split_top_level(raw[1:-1]) if p[:1] in "'\""]
+
+
+def nist_cci_disagreement(occurrences, cci_map):
+    """A message if `tag nist:` is not exactly the set its CCIs map to, else None.
+
+    Only checked where each tag is set once: a tag set per conditional arm is
+    left to review rather than paired arm by arm.
+    """
+    values = {}
+    for name, value, _ in occurrences:
+        if name in ("nist", "cci"):
+            values.setdefault(name, []).append(value)
+    if len(values.get("nist", [])) != 1 or len(values.get("cci", [])) != 1:
+        return None
+    nist, ccis = literal_list(values["nist"][0]), literal_list(values["cci"][0])
+    if nist is None or ccis is None:
+        return None
+    unknown = [c for c in ccis if c not in cci_map]
+    if unknown:
+        return f"tag cci: {', '.join(unknown)} not in {CCI_MAP.name} — no Rev 5 part to check against"
+    derived = list(dict.fromkeys(cci_map[c] for c in ccis))
+    if set(nist) == set(derived):
+        return None
+    extra = [n for n in nist if n not in derived]
+    missing = [d for d in derived if d not in nist]
+    detail = "; ".join(x for x in (
+        f"not backed by any CCI: {extra}" if extra else "",
+        f"CCIs map to but missing: {missing}" if missing else "") if x)
+    return f"tag nist: disagrees with tag cci: ({detail}) — the CCIs map to {derived}"
+
+
+def violations(path, cci_map):
     text = path.read_text(encoding="utf-8")
     for cid, block in control_blocks(text):
         seen, names = {}, set()
-        for name, value, signature in tag_occurrences(block):
+        occurrences = tag_occurrences(block)
+        for name, value, signature in occurrences:
             names.add(name)
             for other_value, other_signature in seen.get(name, []):
                 if other_signature == signature:
@@ -185,22 +235,30 @@ def violations(path):
                         "a missing Rev 4 anchor is indistinguishable from a control that has none")
         if "severity" in names and "severity_source" not in names:
             yield cid, "has tag severity: but no tag severity_source:"
+        disagreement = nist_cci_disagreement(occurrences, cci_map)
+        if disagreement:
+            yield cid, disagreement
 
 
 def main(argv):
     roots = argv[1:] or ["controls"]
     files = sorted(f for root in roots for f in Path(root).rglob("*.rb"))
+    if not CCI_MAP.is_file():
+        print(f"::error::{CCI_MAP} is missing; the NIST/CCI agreement check cannot run.")
+        return 1
+    cci_map = json.loads(CCI_MAP.read_text(encoding="utf-8"))["cci"]
 
-    found = [(f, cid, msg) for f in files for cid, msg in violations(f)]
+    found = [(f, cid, msg) for f in files for cid, msg in violations(f, cci_map)]
     if found:
-        print("::error::control tags are incomplete, duplicated, or non-literal.")
+        print("::error::control tags are incomplete, duplicated, non-literal, or disagree.")
         for f, cid, msg in found:
             print(f"  {f}: {cid}: {msg}")
         return 1
 
     controls = sum(1 for f in files for _ in control_blocks(f.read_text(encoding="utf-8")))
     print(f"OK — {controls} control(s) in {len(files)} file(s); every one carries its "
-          "NIST, CCI, Rev 4 and severity provenance, once each, as literals.")
+          "NIST, CCI, Rev 4 and severity provenance, once each, as literals, "
+          "with NIST matching its CCIs.")
     return 0
 
 
