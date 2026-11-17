@@ -68,11 +68,19 @@ Fully documented in [`inputs/example.yml`](inputs/example.yml).
 | **Scoping** | `assessed_repositories`, `excluded_repositories` |
 | **Policy** | `max_image_finding_severity`, `require_enhanced_scanning`, `require_kms_cmk_encryption`, `pw_min_length` |
 | **Allow-list** | `trusted_registry_account_ids` |
+| **Image signing** | `image_signing_keys`, `trusted_signing_profiles`, `signature_repository` |
 | **Attestation** | `leveraged_evidence_base`, `inherited_evidence_uri`, `leveraged_evidence_max_age_days` |
 
 **`assessed_repositories` empty means every repository in the account.** That is
 the intended default, and it is not a no-op — with 189 controls, the size of that
 list is the difference between a fast scan and a very long one.
+
+**Signatures are verified only against keys you trust.** Without
+`image_signing_keys` or `trusted_signing_profiles`, the signing controls confirm
+a signature is present but skip the approved-source check, and say so. With
+them, an image passes only when a key-based cosign signature over its digest
+verifies against a trusted key, or AWS signed it with a trusted profile.
+Keyless (Fulcio) and Notation signatures are reported as not verifiable yet.
 
 **The scanning control is fail-closed.** An image that has never been scanned
 fails, the same as one with findings above the threshold. "We do not know" is not
