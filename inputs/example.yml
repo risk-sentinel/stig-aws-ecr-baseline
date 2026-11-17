@@ -60,6 +60,30 @@ pw_min_length: 15
 #   trusted_registry_account_ids: ['111111111111']
 trusted_registry_account_ids: []
 
+# ---- IMAGE SIGNING — who may sign --------------------------------------------
+
+# Trusted cosign public keys (PEM: ECDSA, RSA or Ed25519). An image is verified
+# when a cosign signature over its digest verifies against one of them.
+# EMPTY, with no trusted_signing_profiles, = signatures are checked for
+# presence only, and the approved-source checks skip saying so.
+#   image_signing_keys:
+#     - |
+#       -----BEGIN PUBLIC KEY-----
+#       ...
+#       -----END PUBLIC KEY-----
+image_signing_keys: []
+
+# AWS Signer profile ARNs whose COMPLETE AWS-native image signatures count as
+# verified.
+#   trusted_signing_profiles: ['arn:aws:signer:us-east-1:111111111111:/signing-profiles/release']
+trusted_signing_profiles: []
+
+# ECR repository, in the same registry, that holds cosign signatures when they
+# are pushed somewhere other than the image's own repository (COSIGN_REPOSITORY).
+# EMPTY = each image's own repository. The scan role needs ecr:BatchGetImage and
+# ecr:GetDownloadUrlForLayer on it.
+signature_repository: ""
+
 # ---- ATTESTATION — evidence for what no API can answer ----------------------
 
 # Base URI for the leveraged cloud-provider authorization manifest — the

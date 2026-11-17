@@ -14,6 +14,7 @@
 # "absent" rather than failing the whole resource.
 
 require "json"
+require "net/http"
 require "set"   # Enumerable#to_set — autoloaded in Ruby 3.4, explicit here so the
                 # resource does not depend on the runtime's autoload behaviour.
 
@@ -36,6 +37,10 @@ class AwsEcrRepository < AwsResourceBase
     opts = opts.dup
     region_override = Array(opts.delete(:regions))
     explicit_region = opts.delete(:region)
+    # Signing trust, passed down by controls (resources cannot read inputs).
+    @signature_repository = opts.delete(:signature_repository).to_s.strip
+    @signing_keys, @signing_key_errors = CosignVerify.parse_keys(opts.delete(:signing_keys))
+    @trusted_signing_profiles = Array(opts.delete(:trusted_signing_profiles)).map(&:to_s).reject(&:empty?)
     super(opts)
     validate_parameters(required: %i[repository_name])
     @repository_name = opts[:repository_name]
@@ -314,6 +319,39 @@ class AwsEcrRepository < AwsResourceBase
     []
   end
 
+  # ---- signature verification -----------------------------------------------
+  # Presence (supply_chain_gaps) says a signature-shaped artifact exists. These
+  # say whether an approved source made it: a cosign signature that verifies
+  # against `signing_keys`, or a COMPLETE AWS-native signature from one of
+  # `trusted_signing_profiles`.
+
+  attr_reader :signing_key_errors
+
+  def signature_verification_configured?
+    !@signing_keys.empty? || !@trusted_signing_profiles.empty?
+  end
+
+  # Images with no signature from an approved source. Labels say what was found
+  # and why each candidate was rejected.
+  def signature_verification_gaps
+    images.filter_map do |im|
+      v = verification_for(im[:digest])
+      next if v[:verified] || !v[:errors].empty?
+      reasons = v[:reasons].empty? ? ["no signature found"] : v[:reasons].uniq
+      "#{im[:tags].first || im[:digest][0, 16]}: not verified [#{reasons.join('; ')}]"
+    end
+  end
+
+  # Images whose verification could not be completed (an API or download
+  # error) and that no other signature verified. Not the same as unverified.
+  def signature_verification_undetermined
+    images.filter_map do |im|
+      v = verification_for(im[:digest])
+      next if v[:verified] || v[:errors].empty?
+      "#{im[:tags].first || im[:digest][0, 16]}: #{v[:errors].uniq.join('; ')}"
+    end
+  end
+
   def to_s
     "ECR Repository #{@repository_name}"
   end
@@ -343,8 +381,19 @@ class AwsEcrRepository < AwsResourceBase
 
   def image_signed?(digest)
     return true if cosign_signed?(digest)     # tags — no API call
+    return true if elsewhere_signed?(digest)  # cosign tag in signature_repository
     return true if referrer_signed?(digest)   # OCI 1.1 referrers
     native_signed?(digest)                    # AWS Signer / Notation
+  end
+
+  # A cosign signature kept in `signature_repository` (COSIGN_REPOSITORY).
+  def elsewhere_signed?(digest)
+    @elsewhere_error = nil
+    return false if @signature_repository.empty? || @signature_repository == @repository_name
+    !fetch_manifest(@signature_repository, image_tag: cosign_tag_for(digest, "sig")).nil?
+  rescue StandardError => e
+    @elsewhere_error = e.class.name
+    false
   end
 
   def referrer_signed?(digest)
@@ -362,6 +411,8 @@ class AwsEcrRepository < AwsResourceBase
     statuses = Array(@client.describe_image_signing_status(
       repository_name: @repository_name, image_id: { image_digest: digest }
     ).signing_statuses)
+    (@native_profiles ||= {})[digest] = statuses.select { |s| s.status.to_s.casecmp("COMPLETE").zero? }
+                                                .map { |s| s.signing_profile_arn.to_s }
     (@native_signing ||= {})[digest] = statuses.map do |s|
       code = s.respond_to?(:failure_code) ? s.failure_code.to_s : ""
       code.empty? ? s.status.to_s : "#{s.status} (#{code})"
@@ -376,10 +427,118 @@ class AwsEcrRepository < AwsResourceBase
   # mechanism that makes an API call errored — the answer is unknown, not "no".
   def signing_undetermined?(digest)
     return false if cosign_signed?(digest)
+    return false if elsewhere_signed?(digest)
+    elsewhere_err = @elsewhere_error
     referrer_signed?(digest)
     referrer_err = @referrer_error
     native_signed?(digest)
-    !(referrer_err.nil? && @signing_error.nil?)
+    !(elsewhere_err.nil? && referrer_err.nil? && @signing_error.nil?)
+  end
+
+  # ---- verification plumbing ------------------------------------------------
+
+  # { verified:, reasons: [], errors: [] } for one image, memoised.
+  def verification_for(digest)
+    (@verification ||= {})[digest] ||= begin
+      reasons = []
+      errors = []
+      verified = false
+
+      cosign_signature_sources(digest, errors).each do |repo, image_id|
+        manifest = fetch_manifest(repo, **image_id)
+        next if manifest.nil?
+        layers = CosignVerify.signature_layers(manifest)
+        reasons << "#{repo}: signature manifest has no signed layers" if layers.empty?
+        layers.each do |l|
+          if l[:keyless]
+            reasons << "#{repo}: keyless (certificate) signature, not verifiable by this profile"
+            next
+          end
+          why = CosignVerify.verify(fetch_blob(repo, l[:digest]), l[:digest], l[:signature], @signing_keys, digest)
+          if why.nil?
+            verified = true
+            break
+          end
+          reasons << "#{repo}: #{why}"
+        rescue StandardError => e
+          errors << "#{repo}: #{e.class}"
+        end
+        break if verified
+      rescue StandardError => e
+        errors << "#{repo}: #{e.class}"
+      end
+
+      unless verified
+        begin
+          referrers_for(digest).each do |r|
+            next unless referrer_matches?([r], UNVERIFIABLE_SIGNATURE_MEDIA)
+            reasons << "#{@repository_name}: Notation or sigstore-bundle signature present, not verifiable by this profile"
+          end
+        rescue StandardError => e
+          errors << "referrers: #{e.class}"
+        end
+        native_signed?(digest)
+        errors << "AWS signing status: #{@signing_error}" if @signing_error
+        profiles = Array((@native_profiles || {})[digest])
+        if (profiles & @trusted_signing_profiles).any?
+          verified = true
+        elsif profiles.any?
+          reasons << "AWS signing profile not in trusted_signing_profiles: #{profiles.join(', ')}"
+        end
+      end
+
+      { verified: verified, reasons: reasons, errors: errors }
+    end
+  end
+
+  # [repository, image_id] for every place a cosign signature for digest may be.
+  def cosign_signature_sources(digest, errors)
+    tag = cosign_tag_for(digest, "sig")
+    out = []
+    out << [@repository_name, { image_tag: tag }] if all_tags.include?(tag)
+    unless @signature_repository.empty? || @signature_repository == @repository_name
+      out << [@signature_repository, { image_tag: tag }]
+    end
+    begin
+      referrers_for(digest).each do |r|
+        next unless referrer_matches?([r], /cosign\.artifact\.sig/i)
+        out << [@repository_name, { image_digest: r.digest }] if r.respond_to?(:digest)
+      end
+    rescue StandardError => e
+      errors << "referrers: #{e.class}"
+    end
+    out
+  end
+
+  # Manifest JSON for one image id, or nil when the repository has no such image.
+  def fetch_manifest(repo, image_tag: nil, image_digest: nil)
+    image_id = image_tag ? { image_tag: image_tag } : { image_digest: image_digest }
+    resp = @client.batch_get_image(repository_name: repo, image_ids: [image_id],
+                                   accepted_media_types: CosignVerify::MANIFEST_MEDIA_TYPES)
+    img = Array(resp.images).first
+    return img.image_manifest if img
+    failure = Array(resp.failures).first
+    return nil if failure.nil? || failure.failure_code.to_s =~ /ImageNotFound|ImageTagDoesNotMatchDigest/
+    raise "BatchGetImage #{failure.failure_code}"
+  end
+
+  BLOB_LIMIT = 1 << 20
+
+  # Signature formats this profile detects but cannot yet verify.
+  UNVERIFIABLE_SIGNATURE_MEDIA = /notary\.signature|notation\.signature|sigstore\.bundle/i.freeze
+
+  # A signature payload blob, through the layer's presigned download URL.
+  def fetch_blob(repo, layer_digest)
+    url = @client.get_download_url_for_layer(repository_name: repo, layer_digest: layer_digest).download_url
+    uri = URI(url)
+    raise "unexpected download URL scheme #{uri.scheme}" unless uri.scheme == "https"
+    res = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 10, read_timeout: 20) do |http|
+      http.request(Net::HTTP::Get.new(uri))
+    end
+    raise "layer download HTTP #{res.code}" unless res.is_a?(Net::HTTPSuccess)
+    body = res.body.to_s
+    raise "layer larger than #{BLOB_LIMIT} bytes" if body.bytesize > BLOB_LIMIT
+    body
   end
 
   # ---- SBOM detection -------------------------------------------------------

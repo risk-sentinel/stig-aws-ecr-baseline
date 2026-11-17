@@ -41,12 +41,18 @@ control 'SV-233285' do
  # AND carry an attached SBOM (list_image_referrers). Fail-closed: unsigned or no-SBOM == gap.
  repos = ecr_repos_in_scope
  scan_regions = ecr_scan_regions
+ # Signing trust from inputs, passed down: resources cannot read inputs.
+ sig_opts = {
+   signature_repository: input('signature_repository'),
+   signing_keys: input('image_signing_keys'),
+   trusted_signing_profiles: input('trusted_signing_profiles'),
+ }
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  repos.each do |name|
  describe "Image supply-chain (signed + SBOM) for #{name}" do
- subject { aws_ecr_repository(repository_name: name, regions: scan_regions).supply_chain_gaps }
+ subject { aws_ecr_repository(repository_name: name, regions: scan_regions, **sig_opts).supply_chain_gaps }
  it { should be_empty }
  end
  end

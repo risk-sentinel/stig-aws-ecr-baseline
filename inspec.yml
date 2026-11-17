@@ -70,6 +70,22 @@ inputs:
   - name: trusted_registry_account_ids
     type: array
     value: []                  # account IDs whose ECR registries are approved image sources
+  - name: image_signing_keys
+    type: array
+    value: []                  # Trusted cosign public keys (PEM: ECDSA, RSA or
+                               # Ed25519). An image is verified when a cosign
+                               # signature over its digest verifies against one.
+                               # Empty, with no trusted_signing_profiles, means
+                               # signatures are checked for presence only.
+  - name: trusted_signing_profiles
+    type: array
+    value: []                  # AWS Signer profile ARNs whose COMPLETE AWS-native
+                               # image signatures count as verified.
+  - name: signature_repository
+    type: string
+    value: ""                  # ECR repository in the same registry holding cosign
+                               # signatures (COSIGN_REPOSITORY). Empty: each image's
+                               # own repository.
   - name: leveraged_evidence_base
     type: string
     value: ''  # base URI for the leveraged the cloud-provider authorization manifest (inherited evidence)
