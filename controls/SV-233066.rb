@@ -32,11 +32,12 @@ control 'SV-233066' do
 
  # Registry-layer ECR assertion (limit registry privileges); account-wide, scoped via excluded_repositories.
  repos = ecr_repos_in_scope
+ scan_regions = ecr_scan_regions
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  repos.each do |name|
- describe aws_ecr_repository(repository_name: name) do
+ describe aws_ecr_repository(repository_name: name, regions: scan_regions) do
  it { should_not be_policy_allows_external }
  end
  end

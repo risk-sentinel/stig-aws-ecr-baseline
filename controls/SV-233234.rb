@@ -41,12 +41,13 @@ control 'SV-233234' do
  # Security updates installed within window => no unscanned/over-severity images (finding gate).
  ceiling = input('max_image_finding_severity', value: 'HIGH')
  repos = ecr_repos_in_scope
+ scan_regions = ecr_scan_regions
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  repos.each do |name|
  describe "Image currency (no unscanned or >#{ceiling}-severity) for #{name}" do
- subject { aws_ecr_repository(repository_name: name).scan_gate_violations(ceiling) }
+ subject { aws_ecr_repository(repository_name: name, regions: scan_regions).scan_gate_violations(ceiling) }
  it { should be_empty }
  end
  end

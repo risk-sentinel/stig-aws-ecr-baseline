@@ -37,12 +37,13 @@ control 'SV-263599' do
  # Registry supply-chain: every in-scope image must be SIGNED (describe_image_signing_status)
  # AND carry an attached SBOM (list_image_referrers). Fail-closed: unsigned or no-SBOM == gap.
  repos = ecr_repos_in_scope
+ scan_regions = ecr_scan_regions
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  repos.each do |name|
  describe "Image supply-chain (signed + SBOM) for #{name}" do
- subject { aws_ecr_repository(repository_name: name).supply_chain_gaps }
+ subject { aws_ecr_repository(repository_name: name, regions: scan_regions).supply_chain_gaps }
  it { should be_empty }
  end
  end

@@ -11,12 +11,32 @@
 # set, narrows to an explicit allowlist first; exclusions always apply on top.
 
 module EcrScopeHelpers
+  class ScopeUnreadable < StandardError; end
+
+  # ECR is regional and its resources cannot read inputs, so every caller
+  # passes this. Read it into a local in the control body; `subject` and `it`
+  # blocks run where helper methods are absent.
+  def ecr_scan_regions
+    Array(input("scan_regions", value: []))
+  end
+
+  # Raises when the repository listing failed or a region errored: an empty
+  # scope would read as Not Applicable, which is not the same as nothing found.
   def ecr_repos_in_scope
-    all      = aws_ecr_repositories.repository_names
-    allow    = clean_list("assessed_repositories")
-    base     = allow.empty? ? all : (all & allow)
-    excluded = clean_list("excluded_repositories")
-    base - excluded
+    @ecr_repos_in_scope ||= begin
+      listing  = aws_ecr_repositories(regions: ecr_scan_regions)
+      problems = listing.resource_failed? ? [listing.resource_exception_message.to_s] : []
+      problems += listing.region_errors.map { |r, e| "#{r}: #{e}" }
+      unless problems.empty?
+        raise ScopeUnreadable,
+              "could not list ECR repositories, so nothing was assessed: #{problems.join('; ')}"
+      end
+      all      = listing.repository_names
+      allow    = clean_list("assessed_repositories")
+      base     = allow.empty? ? all : (all & allow)
+      excluded = clean_list("excluded_repositories")
+      base - excluded
+    end
   end
 
   def excluded_repositories_list

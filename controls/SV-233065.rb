@@ -34,12 +34,13 @@ control 'SV-233065' do
 
  # Verify images: every in-scope image signed + SBOM-attached (fail-closed).
  repos = ecr_repos_in_scope
+ scan_regions = ecr_scan_regions
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  repos.each do |name|
  describe "Image supply-chain (signed + SBOM) for #{name}" do
- subject { aws_ecr_repository(repository_name: name).supply_chain_gaps }
+ subject { aws_ecr_repository(repository_name: name, regions: scan_regions).supply_chain_gaps }
  it { should be_empty }
  end
 
@@ -48,7 +49,7 @@ control 'SV-233065' do
  # Without this the two are indistinguishable, and the check above cannot be
  # believed in either direction: not when it fails, and not when it passes.
  describe "Image supply-chain determinable for #{name} (no API errors)" do
- subject { aws_ecr_repository(repository_name: name).supply_chain_undetermined }
+ subject { aws_ecr_repository(repository_name: name, regions: scan_regions).supply_chain_undetermined }
  it { should be_empty }
  end
  end

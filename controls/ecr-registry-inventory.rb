@@ -16,7 +16,8 @@ control 'ecr-registry-inventory' do
  tag scan_target: true
  tag implementation_status: 'inherited'
 
- all_repos = aws_ecr_repositories.repository_names
+ scan_regions = ecr_scan_regions
+ all_repos = aws_ecr_repositories(regions: scan_regions).repository_names
  excluded = excluded_repositories_list
  in_scope = ecr_repos_in_scope
 
@@ -27,7 +28,7 @@ control 'ecr-registry-inventory' do
  # `check` and `json` do not evaluate control bodies, so this only surfaces on
  # a real exec.
  orphans_by_repo = in_scope.sort.each_with_object({}) do |name, acc|
- found = aws_ecr_repository(repository_name: name).orphan_supply_chain_artifacts
+ found = aws_ecr_repository(repository_name: name, regions: scan_regions).orphan_supply_chain_artifacts
  acc[name] = found unless found.empty?
  end
 
