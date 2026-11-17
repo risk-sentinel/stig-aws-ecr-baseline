@@ -254,6 +254,8 @@ class AwsEcrRepository < AwsResourceBase
       # earlier versions of this check were wrong.
       seen = observed_referrer_types(im[:digest])
       saw = seen.empty? ? "no referrers found" : "referrers seen: #{seen.join(', ')}"
+      native = Array((@native_signing || {})[im[:digest]])
+      saw += "; AWS signing: #{native.join(', ')}" unless native.empty?
       "#{im[:tags].first || im[:digest][0, 16]}: #{miss.join('+')} [#{saw}]"
     end.compact
   end
@@ -353,11 +355,18 @@ class AwsEcrRepository < AwsResourceBase
     false
   end
 
+  # Signed only when a signing job finished. IN_PROGRESS and FAILED entries
+  # are recorded so a gap can say what AWS reported, but prove nothing.
   def native_signed?(digest)
     @signing_error = nil
-    !Array(@client.describe_image_signing_status(
+    statuses = Array(@client.describe_image_signing_status(
       repository_name: @repository_name, image_id: { image_digest: digest }
-    ).signing_statuses).empty?
+    ).signing_statuses)
+    (@native_signing ||= {})[digest] = statuses.map do |s|
+      code = s.respond_to?(:failure_code) ? s.failure_code.to_s : ""
+      code.empty? ? s.status.to_s : "#{s.status} (#{code})"
+    end
+    statuses.any? { |s| s.status.to_s.casecmp("COMPLETE").zero? }
   rescue StandardError => e
     @signing_error = e.class.name
     false
