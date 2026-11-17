@@ -371,9 +371,8 @@ def main(argv):
     if not strict:
         # Same discipline as the helper notice: "nothing to check" and "checked,
         # found nothing" must not print identically.
-        print("::notice::no library calls region_scope_or_fail! without a "
-              "client_region_for fallback, so the region-argument rule has nothing "
-              "to check in this profile.")
+        print("::notice::no library calls region_scope_or_fail!, so the "
+              "region-argument rule has nothing to check in this profile.")
 
     found = {"resource": [], "helper": [], "regions": []}
     for f in sorted(targets):
