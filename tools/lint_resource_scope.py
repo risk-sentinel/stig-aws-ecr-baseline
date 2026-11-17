@@ -209,6 +209,12 @@ def violations(path: Path, helpers=frozenset()):
 # C-6.2/C-6.6, then C-6.8 — and C-6.8 hid behind a conditional, so it only
 # appeared once a consumer populated the input that reached the branch. Neither
 # `check` nor `json` can see it: both only load the control.
+#
+# A call with no parentheses (`describe res do`, `res.names`) passes nothing,
+# so it is a violation too. A resource that can resolve its region from an
+# ARN (`client_region_for`) still fails closed on a bare name, so its calls
+# must pass `regions:`, `region:`, or an identifier named as an ARN (`arn`,
+# `key_arn`, `secret.arn`).
 
 EXAMPLE_HEREDOC_RE = re.compile(r"^\s*example\s+<<[-~]?([A-Z]+)\b.*?^\s*\1\s*$",
                                 re.M | re.S)
@@ -231,18 +237,18 @@ STRICT_NAME_RE = re.compile(r'^\s*name\s+"([a-z0-9_]+)"', re.M)
 
 
 def strict_region_resources(roots):
-    """Resource names that fail closed with no identifier-based escape hatch."""
-    names = set()
+    """{resource name: argument keys that satisfy it} for every resource that
+    fails closed without a region scope. One that can resolve a region from an
+    ARN also accepts `region`."""
+    names = {}
     for root in roots:
         for lib in Path(root).rglob("*.rb"):
             body = lib.read_text(encoding="utf-8", errors="replace")
             if "region_scope_or_fail!" not in body:
                 continue
-            if "client_region_for" in body:
-                continue  # resolves its own region from the identifier
             m = STRICT_NAME_RE.search(body)
             if m:
-                names.add(m.group(1))
+                names[m.group(1)] = ("regions", "region", ARN_VALUE) if "client_region_for" in body else ("regions",)
     return names
 
 
@@ -272,21 +278,43 @@ def _argument_text(body: str, open_paren: int) -> str:
     return body[open_paren + 1:open_paren + 200]
 
 
-def _calls_without_regions(body: str, name: str):
-    """(lineno, rendered call) for each construction of `name` lacking regions:."""
-    for m in re.finditer(rf"\b{re.escape(name)}\(", body):
-        args = _argument_text(body, m.end() - 1)
-        if "regions" in args:
-            continue
-        yield body[:m.start()].count("\n") + 1, f"{name}({args.strip()[:80]})"
+# Marker key: the call passes an identifier named as an ARN, which
+# client_region_for resolves to a region.
+ARN_VALUE = "<arn>"
+ARN_VALUE_RE = re.compile(r":\s*[\w.@]*\barn\b|:\s*\w*_arn\b", re.I)
+
+
+def _without_comments(body: str) -> str:
+    """Blank whole-line comments, keeping line numbers."""
+    return re.sub(r"(?m)^\s*#.*$", "", body)
+
+
+def _calls_without_regions(body: str, name: str, keys=("regions",)):
+    """(lineno, rendered call) for each construction of `name` that passes none
+    of `keys`. A bare reference (no parentheses) passes nothing."""
+    for m in re.finditer(rf"(?<![\w@:.\"'])\b{re.escape(name)}\b(?![\w:\"'])", body):
+        line = body[body.rfind("\n", 0, m.start()) + 1:body.find("\n", m.end())]
+        if STRICT_NAME_RE.match(line):
+            continue  # the resource's own `name "..."` declaration
+        lineno = body[:m.start()].count("\n") + 1
+        rest = body[m.end():]
+        if rest.startswith("("):
+            args = _argument_text(body, m.end())
+            if any(re.search(rf"\b{k}\s*:", args) for k in keys if k != ARN_VALUE):
+                continue
+            if ARN_VALUE in keys and ARN_VALUE_RE.search(args):
+                continue
+            yield lineno, f"{name}({args.strip()[:80]})"
+        else:
+            yield lineno, f"{name} (no arguments)"
 
 
 def region_argument_violations(path: Path, strict):
-    """Calls to a strict resource whose argument list carries no `regions:`."""
+    """Calls to a strict resource that pass no region scope."""
     if not strict:
         return []
-    body = _without_examples(path.read_text(encoding="utf-8", errors="replace"))
-    return [hit for name in strict for hit in _calls_without_regions(body, name)]
+    body = _without_comments(_without_examples(path.read_text(encoding="utf-8", errors="replace")))
+    return [hit for name, keys in strict.items() for hit in _calls_without_regions(body, name, keys)]
 
 
 # One message per rule. Kept beside each other so the three read as a set: every
