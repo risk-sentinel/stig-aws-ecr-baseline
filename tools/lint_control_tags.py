@@ -31,11 +31,13 @@ passes both `check` AND `json` while emitting `[None]` -- a tag that looks
 present and carries nothing.
 
 **A NIST tag its CCIs do not support.** `tag cci:` and `tag nist:` describe the
-same requirement at two granularities, and a consumer may join on either. Every
-CCI maps to exactly one Rev 5 part; `tag nist:` must be exactly the set its CCIs
-map to. A base control where Rev 5 assesses parts (`AU-12` for `AU-12 a`), a part
-lettered from Rev 4, or a CCI picked for a different control all fail here. The
-mapping ships beside this file as cci_to_nist.json, so the check needs no network.
+same requirement at two granularities, and a consumer may join on either. DISA's
+CCI list gives each CCI its Rev 5 part (a few cite two); `tag nist:` must be
+exactly the union of its CCIs' parts. A base control where Rev 5 assesses parts
+(`AU-9` for `AU-9 a`), a part lettered from Rev 4, or a CCI picked for a different
+control all fail here. So does a CCI DISA deprecated or never referenced to Rev 5;
+the message names candidate replacements. The mapping ships beside this file as
+cci_to_nist.json, so the check needs no network.
 
 Two things this linter must NOT flag, both of which the first version got wrong:
 
@@ -57,8 +59,8 @@ import re
 import sys
 from pathlib import Path
 
-# CCI -> Rev 5 label, from MITRE Heimdall's CciNistMappingData.ts. A fixed file
-# beside this one, not an argument.
+# CCI -> Rev 5 labels, generated from DISA's CCI list; its _source names the
+# list's version. A fixed file beside this one, not an argument.
 CCI_MAP = Path(__file__).resolve().parent / "cci_to_nist.json"
 
 CONTROL = re.compile(r"^\s*control\s+['\"]([^'\"]+)", re.M)
@@ -180,8 +182,11 @@ def literal_list(raw):
     return [p[1:-1] for p in split_top_level(raw[1:-1]) if p[:1] in "'\""]
 
 
-def nist_cci_disagreement(occurrences, cci_map):
+def nist_cci_disagreement(occurrences, cci_map, no_rev5=None):
     """A message if `tag nist:` is not exactly the set its CCIs map to, else None.
+
+    `cci_map` is CCI -> [Rev 5 labels]; `no_rev5` is CCI -> {reason, candidates}
+    for the CCIs that have none.
 
     Only checked where each tag is set once: a tag set per conditional arm is
     left to review rather than paired arm by arm.
@@ -197,8 +202,17 @@ def nist_cci_disagreement(occurrences, cci_map):
         return None
     unknown = [c for c in ccis if c not in cci_map]
     if unknown:
-        return f"tag cci: {', '.join(unknown)} not in {CCI_MAP.name} — no Rev 5 part to check against"
-    derived = list(dict.fromkeys(cci_map[c] for c in ccis))
+        no_rev5 = no_rev5 or {}
+        notes = []
+        for c in unknown:
+            entry = no_rev5.get(c)
+            if entry is None:
+                notes.append(f"{c} is not in DISA's CCI list")
+            else:
+                options = ", ".join(entry.get("candidates") or []) or "none found; choose by hand"
+                notes.append(f"{c} has no Rev 5 part ({entry.get('reason')}); candidates: {options}")
+        return "tag cci: " + "; ".join(notes)
+    derived = list(dict.fromkeys(label for c in ccis for label in cci_map[c]))
     if set(nist) == set(derived):
         return None
     extra = [n for n in nist if n not in derived]
@@ -209,7 +223,7 @@ def nist_cci_disagreement(occurrences, cci_map):
     return f"tag nist: disagrees with tag cci: ({detail}) — the CCIs map to {derived}"
 
 
-def violations(path, cci_map):
+def violations(path, cci_map, no_rev5=None):
     text = path.read_text(encoding="utf-8")
     for cid, block in control_blocks(text):
         seen, names = {}, set()
@@ -235,7 +249,7 @@ def violations(path, cci_map):
                         "a missing Rev 4 anchor is indistinguishable from a control that has none")
         if "severity" in names and "severity_source" not in names:
             yield cid, "has tag severity: but no tag severity_source:"
-        disagreement = nist_cci_disagreement(occurrences, cci_map)
+        disagreement = nist_cci_disagreement(occurrences, cci_map, no_rev5)
         if disagreement:
             yield cid, disagreement
 
@@ -246,9 +260,10 @@ def main(argv):
     if not CCI_MAP.is_file():
         print(f"::error::{CCI_MAP} is missing; the NIST/CCI agreement check cannot run.")
         return 1
-    cci_map = json.loads(CCI_MAP.read_text(encoding="utf-8"))["cci"]
+    mapping = json.loads(CCI_MAP.read_text(encoding="utf-8"))
+    cci_map, no_rev5 = mapping["cci"], mapping.get("no_rev5", {})
 
-    found = [(f, cid, msg) for f in files for cid, msg in violations(f, cci_map)]
+    found = [(f, cid, msg) for f in files for cid, msg in violations(f, cci_map, no_rev5)]
     if found:
         print("::error::control tags are incomplete, duplicated, non-literal, or disagree.")
         for f, cid, msg in found:

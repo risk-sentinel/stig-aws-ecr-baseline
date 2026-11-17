@@ -26,7 +26,7 @@ control 'SV-233060' do
  tag fix_id: 'F-35964r600668_fix'
  tag 'documentable'
  tag cci: ['CCI-001494']
- tag nist: ['AU-9']
+ tag nist: ['AU-9 a']
  tag ksi:  ['KSI-MLA-OSM']
  tag nist_r4: ['AU-9']
  tag implementation_status: 'inherited'
