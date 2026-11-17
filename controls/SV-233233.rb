@@ -59,12 +59,13 @@ control 'SV-233233' do
  # unscanned == unproven == violation). scan-on-push itself is CTR-001335.
  ceiling = input('max_image_finding_severity', value: 'HIGH')
  repos = ecr_repos_in_scope
+ scan_regions = ecr_scan_regions
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  repos.each do |name|
  describe "Image scan gate for #{name} (no unscanned or >#{ceiling}-severity images)" do
- subject { aws_ecr_repository(repository_name: name).scan_gate_violations(ceiling) }
+ subject { aws_ecr_repository(repository_name: name, regions: scan_regions).scan_gate_violations(ceiling) }
  it { should be_empty }
  end
  end

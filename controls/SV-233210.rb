@@ -38,15 +38,16 @@ control 'SV-233210' do
  # privileged OS + language-package vulnerability scan of all image components, vs the
  # limited BASIC scan. Registry-wide setting; N/A when no ECR repositories are in scope.
  repos = ecr_repos_in_scope
+ scan_regions = ecr_scan_regions
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  if input('require_enhanced_scanning', value: true)
- describe aws_ecr_registry_scanning do
+ describe aws_ecr_registry_scanning(regions: scan_regions) do
  it { should be_enhanced }
  end
  else
- describe aws_ecr_registry_scanning do
+ describe aws_ecr_registry_scanning(regions: scan_regions) do
  it { should be_configured }
  end
  end
