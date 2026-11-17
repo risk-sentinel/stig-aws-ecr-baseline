@@ -29,7 +29,7 @@ control 'SV-233065' do
  tag 'documentable'
  tag cci: ['CCI-003992']
  tag nist: ['CM-14']
- tag nist_r4_unmapped: ['CM-14']
+ tag nist_r4: ['CM-5 (3)']
  tag implementation_status: 'implemented'
 
  # Verify images: every in-scope image signed + SBOM-attached (fail-closed).
