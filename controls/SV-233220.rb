@@ -35,11 +35,12 @@ control 'SV-233220' do
  # key store). require_kms_cmk_encryption=false accepts AWS-managed AES256.
  require_cmk = input('require_kms_cmk_encryption', value: true)
  repos = ecr_repos_in_scope
+ scan_regions = ecr_scan_regions
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  repos.each do |name|
- describe aws_ecr_repository(repository_name: name) do
+ describe aws_ecr_repository(repository_name: name, regions: scan_regions) do
  if require_cmk
  it { should be_kms_encrypted }
  else

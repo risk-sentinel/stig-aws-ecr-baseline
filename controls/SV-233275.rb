@@ -35,11 +35,12 @@ control 'SV-233275' do
 
  # Registry-layer ECR assertion (continuous image scanning); account-wide, scoped via excluded_repositories.
  repos = ecr_repos_in_scope
+ scan_regions = ecr_scan_regions
  impact 0.0 if repos.empty?
  only_if('No ECR repositories in scope') { !repos.empty? }
 
  repos.each do |name|
- describe aws_ecr_repository(repository_name: name) do
+ describe aws_ecr_repository(repository_name: name, regions: scan_regions) do
  it { should be_scan_on_push }
  end
  end
@@ -48,7 +49,7 @@ control 'SV-233275' do
  # point-in-time scan: an image scanned clean at push is never re-evaluated
  # against CVEs disclosed afterwards, even while it is still deployed. The
  # control title says "continuously scan"; only CONTINUOUS_SCAN delivers that.
- describe aws_ecr_registry_scanning do
+ describe aws_ecr_registry_scanning(regions: scan_regions) do
  it { should be_continuous }
  end
 
@@ -56,7 +57,7 @@ control 'SV-233275' do
  # repositories. An uncovered repository is never scanned, and an unscanned
  # repository produces no findings — indistinguishable from a clean one.
  # Note ECR filter wildcards are anchored: `foo-*` does not match `foo`.
- uncovered = aws_ecr_registry_scanning.repositories_not_covered(repos)
+ uncovered = aws_ecr_registry_scanning(regions: scan_regions).repositories_not_covered(repos)
  describe "ECR scanning rule coverage of in-scope repositories (#{repos.length} in scope)" do
  subject { uncovered }
  it { should be_empty }
