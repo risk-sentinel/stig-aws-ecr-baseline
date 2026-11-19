@@ -122,6 +122,17 @@ jobs:
             --entrypoint /opt/cinc-workstation/embedded/bin/ruby \
             "${AUDITOR_IMAGE}" tests/unit/region_coverage_test.rb
 
+      - name: Signature and SBOM referrer classification (stubbed AWS, no credentials)
+        # cosign 3 gives a signature and every attestation the same artifact
+        # type; only the bundle annotations tell them apart. Drives the
+        # resource's own checks against a stubbed ListImageReferrers so a
+        # misread fails here rather than as a wrong finding in a live scan.
+        run: |
+          set -uo pipefail
+          docker run --rm -v "$PWD:/work" -w /work \
+            --entrypoint /opt/cinc-workstation/embedded/bin/ruby \
+            "${AUDITOR_IMAGE}" tests/unit/referrer_kind_test.rb
+
       - name: Control-tag completeness
         # `check` and `json` read tags but assert nothing about them. A control
         # with no Rev 4 anchor, a tag written twice, or a tag whose value is a
