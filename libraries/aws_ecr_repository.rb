@@ -223,11 +223,12 @@ class AwsEcrRepository < AwsResourceBase
   # SBOM-attested. Match the infix explicitly, never bare `cosign`.
   # ---------------------------------------------------------------------------
 
+  # A sigstore bundle (cosign 3) is not listed: the signature and every
+  # attestation share its artifact type, so ReferrerKind reads its annotations.
   SIGNATURE_MEDIA = %r{
     cosign\.artifact\.sig|
     simplesigning|
-    notary\.signature|notation\.signature|
-    sigstore\.bundle
+    notary\.signature|notation\.signature
   }xi.freeze
 
   # Attestation envelopes. The predicate (CycloneDX / SPDX / SLSA provenance) is
@@ -310,11 +311,7 @@ class AwsEcrRepository < AwsResourceBase
   # DID see is diagnosable, one that lists nothing is a guess. Two rounds of
   # media-type patterns were wrong before this existed.
   def observed_referrer_types(digest)
-    referrers_for(digest).flat_map do |r|
-      %i[artifact_media_type artifact_type media_type].filter_map do |m|
-        r.public_send(m).to_s if r.respond_to?(m) && !r.public_send(m).to_s.empty?
-      end
-    end.uniq
+    referrers_for(digest).flat_map { |r| ReferrerKind.descriptions(r) }.uniq
   rescue StandardError
     []
   end
@@ -398,7 +395,8 @@ class AwsEcrRepository < AwsResourceBase
 
   def referrer_signed?(digest)
     @referrer_error = nil
-    referrer_matches?(referrers_for(digest), SIGNATURE_MEDIA)
+    refs = referrers_for(digest)
+    referrer_matches?(refs, SIGNATURE_MEDIA) || refs.any? { |r| ReferrerKind.bundle_signature?(r) }
   rescue StandardError => e
     @referrer_error = e.class.name
     false
@@ -471,7 +469,7 @@ class AwsEcrRepository < AwsResourceBase
       unless verified
         begin
           referrers_for(digest).each do |r|
-            next unless referrer_matches?([r], UNVERIFIABLE_SIGNATURE_MEDIA)
+            next unless referrer_matches?([r], UNVERIFIABLE_SIGNATURE_MEDIA) || ReferrerKind.bundle_signature?(r)
             reasons << "#{@repository_name}: Notation or sigstore-bundle signature present, not verifiable by this profile"
           end
         rescue StandardError => e
@@ -525,7 +523,8 @@ class AwsEcrRepository < AwsResourceBase
   BLOB_LIMIT = 1 << 20
 
   # Signature formats this profile detects but cannot yet verify.
-  UNVERIFIABLE_SIGNATURE_MEDIA = /notary\.signature|notation\.signature|sigstore\.bundle/i.freeze
+  # Sigstore-bundle signatures are matched by ReferrerKind, not by type.
+  UNVERIFIABLE_SIGNATURE_MEDIA = /notary\.signature|notation\.signature/i.freeze
 
   # A signature payload blob, through the layer's presigned download URL.
   def fetch_blob(repo, layer_digest)
@@ -555,7 +554,10 @@ class AwsEcrRepository < AwsResourceBase
     # envelope's predicate type lives inside the signed payload and is NOT
     # visible in referrer metadata, so an attestation counts as evidence here.
     # Proving it is specifically an SBOM would mean fetching the payload.
-    referrer_matches?(refs, SBOM_MEDIA) || referrer_matches?(refs, ATTESTATION_MEDIA)
+    # A sigstore bundle names its predicate in an annotation, so only an SBOM
+    # predicate counts.
+    referrer_matches?(refs, SBOM_MEDIA) || referrer_matches?(refs, ATTESTATION_MEDIA) ||
+      refs.any? { |r| ReferrerKind.bundle_sbom?(r) }
   rescue StandardError => e
     @sbom_error = e.class.name
     false
